@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>视频式题目测试页（Canvas）</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #101418; }
+  #c { display: block; width: 100vw; height: 100vh; touch-action: none; }
+</style>
+</head>
+<body>
+<!-- 关键点：题目是用 Canvas 画出来的像素，不是 DOM 元素。
+     所以题目出现时，无障碍节点树完全不变 —— 与视频里出现题目是同一类情况。
+     浏览器不会因此发出 TYPE_WINDOW_CONTENT_CHANGED，只有轮询才可能发现它。 -->
+<canvas id="c"></canvas>
+<script>
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+let boxes = [];
+let showQ = false;
+let hit = null;
+
+function fit() {
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(innerWidth * dpr);
+  c.height = Math.round(innerHeight * dpr);
+}
+fit();
+addEventListener('resize', fit);
+
+const OPTS = [
+  'A. 水是由氢元素和氧元素组成的',
+  'B. 水是由氢气和氧气组成的',
+  'C. 水是由两个氢原子和一个氧原子组成的',
+  'D. 水分子中含有氢分子'
+];
+const ANSWER = 0;
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawQuestion() {
+  const W = c.width, H = c.height, S = W / 1260;
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#111111';
+  ctx.font = 'bold ' + Math.round(46 * S) + 'px sans-serif';
+  ctx.fillText('下列关于水的说法中，正确的是（  ）', 50 * S, 420 * S);
+
+  const top = 560 * S, h = 180 * S, gap = 32 * S;
+  boxes = [];
+  OPTS.forEach(function (t, i) {
+    const y = top + i * (h + gap);
+    ctx.strokeStyle = (hit === i) ? '#e0218a' : '#bbbbbb';
+    ctx.lineWidth = (hit === i ? 6 : 3) * S;
+    ctx.fillStyle = (hit === i) ? '#ffe6f2' : '#fafafa';
+    roundRect(50 * S, y, W - 100 * S, h, 14 * S);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#111111';
+    ctx.font = Math.round(40 * S) + 'px sans-serif';
+    ctx.fillText(t, 80 * S, y + h * 0.62);
+    boxes.push({ x: 50 * S, y: y, w: W - 100 * S, h: h, i: i });
+  });
+
+  ctx.fillStyle = '#c2185b';
+  ctx.font = 'bold ' + Math.round(38 * S) + 'px sans-serif';
+  const msg = (hit === null)
+    ? '尚未点击任何选项'
+    : ('被点击：' + 'ABCD'[hit] + (hit === ANSWER ? ' — 命中正确选项' : ' — 点错了（正确是 A）'));
+  ctx.fillText(msg, 50 * S, 1620 * S);
+}
+
+const t0 = Date.now();
+function frame() {
+  const t = Date.now() - t0;
+  if (t > 5000) showQ = true;
+
+  if (showQ) {
+    drawQuestion();
+  } else {
+    // 「视频」阶段：画面一直在变（会动），但无障碍节点树始终不变
+    const W = c.width, H = c.height, S = W / 1260;
+    ctx.fillStyle = '#101418'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'hsl(' + Math.round((t / 25) % 360) + ',60%,45%)';
+    ctx.beginPath();
+    ctx.arc(W / 2 + Math.sin(t / 700) * W * 0.30, H * 0.40, 150 * S, 0, 7);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = Math.round(38 * S) + 'px sans-serif';
+    ctx.fillText('视频播放中 ' + (t / 1000).toFixed(1) + 's', 50 * S, H * 0.62);
+    ctx.fillText('（画面在变，但没有无障碍事件）', 50 * S, H * 0.62 + 60 * S);
+    ctx.fillText('5 秒后画面里出现题目', 50 * S, H * 0.62 + 120 * S);
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+c.addEventListener('pointerdown', function (e) {
+  if (!showQ || !boxes.length) return;
+  const r = c.getBoundingClientRect();
+  const x = (e.clientX - r.left) * c.width / r.width;
+  const y = (e.clientY - r.top) * c.height / r.height;
+  for (let k = 0; k < boxes.length; k++) {
+    const b = boxes[k];
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      hit = b.i;
+      document.title = '被点击：' + 'ABCD'[hit];
+    }
+  }
+});
+</script>
+</body>
+</html>

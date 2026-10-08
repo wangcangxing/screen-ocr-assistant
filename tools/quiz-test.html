@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>题目测试页</title>
+<style>
+  body { font-family: system-ui, "Noto Sans CJK SC", sans-serif; margin: 0; padding: 18px; background: #fff; color: #111; }
+  h1 { font-size: 17px; margin: 0 0 14px; color: #555; font-weight: 600; }
+  .q { font-size: 20px; line-height: 1.6; margin-bottom: 18px; }
+  .opt { display: block; width: 100%; text-align: left; font-size: 19px; line-height: 1.5;
+         padding: 16px 14px; margin: 12px 0; border: 2px solid #bbb; border-radius: 10px;
+         background: #fafafa; color: #111; }
+  .opt.picked { border-color: #e0218a; background: #ffe6f2; font-weight: 700; }
+  #log { margin-top: 22px; font-size: 15px; color: #c2185b; min-height: 24px; font-weight: 700; }
+  #seq { color: #777; font-size: 13px; }
+  button.next { margin-top: 10px; font-size: 16px; padding: 12px 16px; }
+</style>
+</head>
+<body>
+<h1>屏幕答题助手 · 真机验证页 <span id="seq"></span></h1>
+
+<div id="host"></div>
+<div id="log">尚未点击任何选项</div>
+<button class="next" onclick="nextQ()">下一题</button>
+
+<script>
+const QUESTIONS = [
+  {
+    stem: "下列关于水的说法中，正确的是（  ）",
+    opts: ["A. 水是由氢元素和氧元素组成的", "B. 水是由氢气和氧气组成的", "C. 水是由两个氢原子和一个氧原子组成的", "D. 水分子中含有氢分子"],
+    answer: 0
+  },
+  {
+    stem: "下列哪个城市是中国的首都？（  ）",
+    opts: ["A. 上海", "B. 北京", "C. 广州", "D. 深圳"],
+    answer: 1
+  },
+  {
+    stem: "1 + 1 等于多少？（  ）",
+    opts: ["A. 1", "B. 3", "C. 2", "D. 4"],
+    answer: 2
+  }
+];
+
+let idx = 0;
+function render() {
+  const q = QUESTIONS[idx];
+  document.getElementById('seq').textContent = "(" + (idx + 1) + "/" + QUESTIONS.length + ")";
+  document.getElementById('host').innerHTML =
+    '<div class="q">' + q.stem + '</div>' +
+    q.opts.map((t, i) => '<button class="opt" data-i="' + i + '">' + t + '</button>').join('');
+  document.querySelectorAll('.opt').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.opt').forEach(x => x.classList.remove('picked'));
+      b.classList.add('picked');
+      const i = Number(b.dataset.i);
+      const ok = i === q.answer ? "✅ 命中正确选项" : "❌ 点错了（正确是 " + "ABCD"[q.answer] + "）";
+      document.getElementById('log').textContent = "第 " + (idx+1) + " 题被点击：" + "ABCD"[i] + " — " + ok;
+    });
+  });
+  document.getElementById('log').textContent = "尚未点击任何选项";
+}
+function nextQ() { idx = (idx + 1) % QUESTIONS.length; render(); }
+render();
+</script>
+</body>
+</html>

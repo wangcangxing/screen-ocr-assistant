@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">屏幕答题助手</string>
+    <string name="service_label">屏幕答题助手</string>
+    <string name="service_summary">读屏取字，遇到题目时请大模型作答并自动点击答案</string>
+    <string name="service_description">开启后，本服务会截取当前屏幕、用 OCR 识别屏幕文字；当识别到题目时会调用你配置的大模型接口获取答案，并尝试点击与答案文字匹配的选项。所有识别与决策都在本机发起，屏幕截图只在本机内存中处理，只有识别出的文字会发送到你配置的接口。</string>
+
+    <string name="sec_status">运行状态</string>
+    <string name="sec_config">大模型配置（OpenAI 兼容接口）</string>
+    <string name="sec_behavior">行为与触发</string>
+    <string name="sec_log">运行日志</string>
+
+    <string name="hint_base_url">接口地址，例如 https://api.deepseek.com/v1</string>
+    <string name="hint_api_key">API Key（sk-...）</string>
+    <string name="hint_model">模型名（可点下方按钮从接口拉取真实可用列表）</string>
+    <string name="hint_reasoning_effort">推理强度，留空=不发送（如 low / high / max）</string>
+    <string name="hint_system_prompt">系统提示词</string>
+
+    <string name="btn_list_models">获取可用模型（GET /models）</string>
+    <string name="btn_open_a11y">打开无障碍设置</string>
+    <string name="btn_save">保存配置</string>
+    <string name="btn_default_prompt">恢复默认提示词</string>
+    <string name="btn_import_config">从文件导入配置</string>
+    <string name="btn_test">测试接口连通性</string>
+    <string name="btn_refresh_log">刷新日志</string>
+    <string name="btn_clear_log">清空日志</string>
+
+    <string name="lbl_reasoning_effort">推理强度（思考模式 effort，官方默认 high，本应用默认 low）</string>
+    <string name="lbl_image_max_side">发图最长边（像素，默认 1600；0=不缩放）</string>
+    <string name="lbl_poll_interval">轮询间隔（毫秒，默认 2000；0=关闭轮询只靠无障碍事件）</string>
+    <string name="lbl_ocr_scale">OCR 缩放百分比（30~100，默认 100；调低省电但小字可能漏认）</string>
+    <string name="lbl_min_score">题目判定阈值（分值，默认 3）</string>
+    <string name="lbl_debounce">截图去抖（毫秒，默认 1200）</string>
+    <string name="lbl_min_conf">点击所需最低置信度（默认 0.5）</string>
+    <string name="lbl_dedup">同一屏去重时长（秒，默认 45）</string>
+    <string name="lbl_timeout">接口超时（毫秒，默认 30000）</string>
+
+    <string name="sw_processing">启用屏幕处理</string>
+    <string name="sw_auto_click">自动点击答案选项</string>
+    <string name="sw_dry_run">试运行（只显示答案，不点击）</string>
+    <string name="sw_send_screenshot">发送屏幕截图给模型（视觉模式，需模型支持 image 模态）</string>
+</resources>

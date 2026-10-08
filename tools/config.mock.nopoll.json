@@ -1,0 +1,7 @@
+{
+  "base_url": "http://127.0.0.1:8080/v1",
+  "model": "mock",
+  "api_key": "mock-key-for-local-verification",
+  "poll_interval_ms": 0,
+  "ocr_scale_percent": 100
+}

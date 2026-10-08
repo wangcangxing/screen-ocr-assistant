@@ -1,0 +1,16 @@
+.gradle/
+build/
+local.properties
+keystore/
+*.iml
+.idea/
+执行报告-*.md
+
+# 解包 APK / 截图等调试留痕，不入库
+shots/
+
+# Python 缓存 / mock 服务的运行留痕（含一张屏幕截图，不入库）
+__pycache__/
+*.pyc
+tools/mock-requests.log
+tools/mock-received-image.jpg
