@@ -35,7 +35,17 @@ object NodeReader {
      * （判断题是拆成 `A` + `对` 两个节点，多选题则是 `A货物` 一个节点）。
      * 补上分隔符后交给 [QuestionDetector]，它才认得出成组选项。
      */
-    private val COMPACT_OPTION = Regex("^([A-H])([^\\s.、．)）:：].*)$")
+    /**
+     * 「A货物」这种**字母紧贴正文、没有分隔符**的紧凑选项 —— 实测智慧树的多选题节点就是这样
+     * （判断题是拆成 `A` + `对` 两个节点，多选题则是 `A货物` 一个节点）。
+     * 补上分隔符后交给 [QuestionDetector]，它才认得出成组选项。
+     *
+     * 注意：正文**必须以中文开头**（`[\u4e00-\u9fff]`）。
+     * 原先写的是「首字符不是空白/标点」，结果把标题 **`AI随堂练习`** 也当成了 `A` + `I随堂练习`，
+     * 判题里于是多出一个 `A@540,270(w948,h132)`（宽 948 = 整行，其实是标题）；
+     * `chooseOption` 选中它、点到标题上 —— 于是**选项永远点不中**，提交被判「暂未作答」。
+     */
+    private val COMPACT_OPTION = Regex("^([A-H])([\\u4e00-\\u9fff].*)$")
 
     /** 紧凑选项的正文长度上限：太长就不是选项而是「A方案是…」这类正文了 */
     private const val COMPACT_MAX_LEN = 40
@@ -50,10 +60,21 @@ object NodeReader {
      *
      * @param width/height 屏幕（截图）尺寸 —— 直接作为 OcrResult 的图像尺寸，使坐标换算系数为 1。
      */
-    fun toOcrResult(root: AccessibilityNodeInfo?, width: Int, height: Int, minLines: Int = 3): OcrResult? {
-        if (root == null || width <= 0 || height <= 0) return null
+    fun toOcrResult(root: AccessibilityNodeInfo?, width: Int, height: Int, minLines: Int = 3): OcrResult? =
+        toOcrResult(listOf(root), width, height, minLines)
+
+    /**
+     * 同上，但**一次读多个窗口**。
+     *
+     * 为什么需要：实测（16416 实例）屏幕上明明有浮层、`uiautomator dump` 也能看到，
+     * 但 `mCurrentFocus` / `mFocusedApp` 都是 null，于是 `rootInActiveWindow` **退化成桌面窗口** ——
+     * 只看它就会判成"非题目"、完全读不到题（而同一界面在 16384 上焦点正常时又能读到）。
+     * 结论：浮层可能是**独立窗口**，必须遍历 `AccessibilityService.getWindows()` 的所有窗口。
+     */
+    fun toOcrResult(roots: List<AccessibilityNodeInfo?>, width: Int, height: Int, minLines: Int = 3): OcrResult? {
+        if (width <= 0 || height <= 0) return null
         val items = ArrayList<Item>()
-        collect(root, items, 0)
+        for (r in roots) collect(r, items, 0)
         val lines = merge(items)
         if (lines.size < minLines) return null
         return OcrResult(
@@ -87,6 +108,91 @@ object NodeReader {
         }
         walk(root, 0)
         return out
+    }
+
+    /** 同上，但**跨多个窗口**查找（浮层可能在独立窗口里，只看焦点窗口会找不到按钮）。 */
+    fun findTextNodes(roots: List<AccessibilityNodeInfo?>, words: Collection<String>,
+                      maxDepth: Int = MAX_DEPTH, limit: Int = 20): List<Pair<AccessibilityNodeInfo, Rect>> {
+        val out = ArrayList<Pair<AccessibilityNodeInfo, Rect>>()
+        for (r in roots) {
+            if (out.size >= limit) break
+            out.addAll(findTextNodes(r, words, maxDepth, limit - out.size))
+        }
+        return out
+    }
+
+    /**
+     * 按屏幕坐标找「能点的那个节点」：**可点击、且框覆盖该点**，多个命中时取**面积最小**的（最具体的那个）。
+     *
+     * 为什么需要它：`dispatchGesture` 的坐标手势在模拟器上会「返回成功却不生效」
+     * （实测 MuMu：日志 `⑦ 点击结果：已发送`，屏幕上选项却毫无变化）；
+     * 而 `performAction(ACTION_CLICK)` 是**直接在目标窗口上执行**的，不走输入子系统，因此可靠得多。
+     * 拿到坐标后先在节点树里捞一下对应节点，捞到就用节点点击，捞不到才退回手势。
+     */
+    /**
+     * 覆盖该点的**最深节点**（通常是叶子）。
+     *
+     * 为什么要单独有这个：WebView 里 `ACTION_CLICK` 打在**叶子**上才可能被响应，
+     * 打在容器/祖先上会「返回 true 却不生效」（坑点 #38）。实测选项叶子 `clickable=false`、
+     * 点它的"可点祖先"无效 —— 所以点击顺序改为：**先叶子 → 再可点祖先 → 最后坐标手势**。
+     */
+    fun findDeepestAt(roots: List<AccessibilityNodeInfo?>, x: Int, y: Int,
+                      maxDepth: Int = MAX_DEPTH): AccessibilityNodeInfo? {
+        var deepest: AccessibilityNodeInfo? = null
+        var deepestDepth = -1
+        fun walk(n: AccessibilityNodeInfo?, d: Int) {
+            if (n == null || d > maxDepth) return
+            val r = Rect()
+            runCatching { n.getBoundsInScreen(r) }
+            if (r.contains(x, y) && d > deepestDepth) {
+                deepestDepth = d
+                deepest = n
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i), d + 1)
+        }
+        for (r in roots) walk(r, 0)
+        return deepest
+    }
+
+    fun findClickableAt(roots: List<AccessibilityNodeInfo?>, x: Int, y: Int,
+                        maxDepth: Int = MAX_DEPTH): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null          // 覆盖该点、且自身可点的最小节点
+        var bestArea = Int.MAX_VALUE
+        var deepest: AccessibilityNodeInfo? = null       // 覆盖该点的最深节点（用于向上回溯）
+        var deepestDepth = -1
+        fun walk(n: AccessibilityNodeInfo?, d: Int) {
+            if (n == null || d > maxDepth) return
+            val r = Rect()
+            runCatching { n.getBoundsInScreen(r) }
+            if (r.contains(x, y)) {
+                if (n.isClickable) {
+                    val area = r.width() * r.height()
+                    if (area in 1 until bestArea) {
+                        bestArea = area
+                        best = n
+                    }
+                }
+                if (d > deepestDepth) {
+                    deepestDepth = d
+                    deepest = n
+                }
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i), d + 1)
+        }
+        for (r in roots) walk(r, 0)
+        if (best != null) return best
+
+        // 兜底：从「覆盖该点的最深节点」往上找第一个可点的祖先。
+        // 实测 WebView 里真正可点的常是**父容器**，选项叶子节点自身 clickable=false ——
+        // 这正是「选项点了却没选中」的原因（同一浮层的提交/关闭按钮却是自身可点）。
+        var cur = deepest
+        var hops = 0
+        while (cur != null && hops < MAX_DEPTH) {
+            if (cur.isClickable) return cur
+            cur = runCatching { cur.parent }.getOrNull()
+            hops++
+        }
+        return null
     }
 
     private fun collect(node: AccessibilityNodeInfo?, out: MutableList<Item>, depth: Int) {

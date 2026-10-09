@@ -31,10 +31,10 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val ocr = OcrEngine()
 
-    /** 点完答案后等多久再关结果浮层 —— 留给平台渲染判定结果（对齐桌面版的 settle_after_click_ms） */
+    /** 点完答案后等多久再关结果浮层 —— 留给平台渲染判定结果。 */
     private val ANSWER_SETTLE_MS = 1200L
 
-    /** 点完选项后等多久再找「提交作答」——有些题型（智慧树「AI 随堂练习」）选完必须提交才判定 */
+    /** 点完选项后等多久再找「提交作答」（有些题型选完必须提交才判定）。 */
     private val SUBMIT_DELAY_MS = 700L
 
     /**
@@ -115,6 +115,17 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        // 关键：允许获取**所有**交互窗口的节点树。
+        // 实测（16416）：屏幕上明明有浮层，mCurrentFocus/mFocusedApp 却是 null，
+        // rootInActiveWindow 于是退化成桌面窗口 —— 不开这个 flag，浮层所在的独立窗口根本读不到。
+        runCatching {
+            val info = serviceInfo
+            if (info != null) {
+                info.flags = info.flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                serviceInfo = info
+                AppLog.i("已开启「获取所有交互窗口」标志（读取浮层所在的独立窗口所必需）")
+            }
+        }
         val caps = serviceInfo?.capabilities ?: 0
         val canShot = caps and AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT != 0
         val canGesture = caps and AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES != 0
@@ -123,6 +134,44 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
             AppLog.w("服务未获得截图能力，请确认 accessibility_service_config.xml 中 canTakeScreenshot=\"true\"")
         }
         startPolling()
+    }
+
+    /**
+     * 当前要读的窗口根节点 —— **取所有 display 上的窗口**。
+     *
+     * 关键坑（实测 16416）：MuMu 这类模拟器会把应用渲染在**非默认 display** 上
+     * （`dumpsys input_method` 里 client 的 `displayId=7`），此时 `getWindows()` **只返回默认 display**
+     * 的窗口 —— 也就是桌面与系统栏，智慧树的窗口一个都读不到，而 `dumpsys window` 里它明明有焦点：
+     *   `mCurrentFocus=Window{… StudyCourseVideoActivity}`、`mFocusedWindow=Window{…}`
+     * （`dumpsys window` 打印的是**所有** display，所以看起来"焦点正常"，App 却瞎了。）
+     *
+     * `getWindowsOnAllDisplays()`（API 30+，本项目 minSdk 30）才是对的。
+     */
+    /**
+     * 所有 display 上的窗口。
+     *
+     * `getWindowsOnAllDisplays()` 返回的是 `SparseArray<List<AccessibilityWindowInfo>>`（key = displayId），
+     * **它没有 `values()`**，只能按下标摊平（别照搬 `windows` 的写法）。
+     */
+    private fun allWindows(): List<android.view.accessibility.AccessibilityWindowInfo> {
+        val out = ArrayList<android.view.accessibility.AccessibilityWindowInfo>()
+        runCatching {
+            val arr = windowsOnAllDisplays
+            for (i in 0 until arr.size()) out.addAll(arr.valueAt(i))
+        }
+        return out
+    }
+
+    private fun allWindowRoots(): List<AccessibilityNodeInfo?> {
+        val out = ArrayList<AccessibilityNodeInfo?>()
+        runCatching {
+            for (w in allWindows()) {
+                val r = w.root ?: continue
+                out.add(r)
+            }
+        }
+        if (out.isEmpty()) out.add(rootInActiveWindow)   // 兜底：拿不到窗口列表时仍用焦点窗口
+        return out
     }
 
     // ------------------------------------------------------------------ 轮询（视频场景必需）
@@ -169,7 +218,9 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
     private fun foregroundIsAnalyzable(): Boolean {
         val viaRoot = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
         val viaWindow = runCatching {
-            windows?.firstOrNull { it.isFocused }?.root?.packageName?.toString()
+            // 同样要取**所有 display**：MuMu 把应用渲染在非默认 display（实测 displayId=7），
+            // 只用 windows 会看到"焦点在桌面"，前台判定随之出错。
+            allWindows().firstOrNull { it.isFocused }?.root?.packageName?.toString()
         }.getOrNull()
         val fg = viaWindow ?: viaRoot
 
@@ -182,6 +233,25 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
         if (fg == null) return false
         if (fg == packageName) return false
         if (fg == "com.android.systemui") return false
+        return true
+    }
+
+    /** OCR 兜底的最小间隔：只在节点树不像题目时才考虑，且别每轮都跑（OCR 约几百毫秒） */
+    private val OCR_FALLBACK_INTERVAL_MS = 3000L
+    private var lastOcrFallbackAt = 0L
+
+    /**
+     * 节点树读到的东西**不像题目**时，是否改用截图 OCR 再判一次。
+     *
+     * 为什么需要：实测 16416 上无障碍服务只看得到"系统栏 + 桌面"（`mCurrentFocus` / `mFocusedApp`
+     * 都是 null 的异常状态），而屏幕上、系统窗口列表里**确实有那道题**。
+     * 截图来自 `takeScreenshot`，不受窗口与焦点影响 —— 那是这种情况唯一的退路。
+     */
+    private fun needOcrFallback(res: OcrResult, prefs: Prefs): Boolean {
+        if (QuestionDetector.detect(res, prefs.minScore).isCandidate) return false
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastOcrFallbackAt < OCR_FALLBACK_INTERVAL_MS) return false
+        lastOcrFallbackAt = now
         return true
     }
 
@@ -273,13 +343,29 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
                         AppLog.i("② 截图成功 ${bmp.width}x${bmp.height}")
                         // 识别来源：**无障碍节点树优先**（原生控件与 WebView 都能读，且不受模拟器截图黑图影响），
                         // 节点树读不到可用文字时才回退 OCR。两者产出同一种 OcrResult，判题与点击逻辑完全共用。
-                        val rootNow = rootInActiveWindow
-                        val fromNodes = NodeReader.toOcrResult(rootNow, bmp.width, bmp.height)
+                        val roots = allWindowRoots()
+                        if (roots.size > 1) {
+                            val names = roots.map { r ->
+                                runCatching { r?.packageName?.toString() }.getOrNull() ?: "?"
+                            }
+                            AppLog.i("   本次读到 ${roots.size} 个窗口：" + names.joinToString(","))
+                        }
+                        val fromNodes = NodeReader.toOcrResult(roots, bmp.width, bmp.height)
                         if (fromNodes != null) {
                             // 读得到题目的这一刻，「关闭」按钮一定也在树里 —— 先把它记下来给收尾用
-                            cacheCloseTarget(rootNow)
+                            cacheCloseTarget(roots)
                             AppLog.i("③ 识别来源：无障碍节点树（${fromNodes.lines.size} 行文本，免 OCR）")
-                            handleOcrResult(prefs, fromNodes, bmp)
+                            // **截图 OCR 兜底**：实测 16416 上屏幕明明有题、系统窗口列表里也有智慧树窗口，
+                            // 但无障碍服务只给得到"系统栏 + 桌面"（mCurrentFocus=null 的异常状态）。
+                            // takeScreenshot 不受窗口与焦点影响 —— 那是这种情况唯一的退路。
+                            if (needOcrFallback(fromNodes, prefs)) {
+                                AppLog.i("   节点树里不像题目 → 改用截图 OCR 再判一次")
+                                ocr.recognize(bmp, prefs.ocrScalePercent) { res ->
+                                    handleOcrResult(prefs, res, bmp)
+                                }
+                            } else {
+                                handleOcrResult(prefs, fromNodes, bmp)
+                            }
                         } else {
                             AppLog.i("③ 节点树没读到可用文字，回退 OCR")
                             ocr.recognize(bmp, prefs.ocrScalePercent) { res ->
@@ -343,6 +429,16 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
         logIfSizeMismatch(res)
         AppLog.i("④ 题目判定：score=${q.score} 阈值=${prefs.minScore} -> ${if (q.isCandidate) "疑似题目" else "判定为非题目"}")
         AppLog.i("   依据：${q.signals.joinToString("、").ifBlank { "无" }}；选项 ${q.options.size} 个")
+        // 诊断（临时）：打出识别到的选项标签与**节点给的坐标**。
+        // 要回答的问题：节点坐标与屏幕坐标是不是同一坐标系 ——
+        // 实测程序点 (540,270)，而截图里该处是标题、「对/错」在 y≈880，差了 600 多像素。
+        if (q.options.isNotEmpty()) {
+            AppLog.i("   选项明细：" + q.options.joinToString(" ｜ ") {
+                val b = it.box
+                if (b == null) "${it.label}@(无框)"
+                else "${it.label}@${b.centerX()},${b.centerY()}(w${b.width()},h${b.height()})"
+            })
+        }
         if (!q.isCandidate) {
             bmp.recycle()
             busy.set(false)
@@ -357,8 +453,37 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
             // 所以先看浮层里的按钮：还亮着「提交作答」＝没答成 → **重新走一遍完整答题**；
             // 显示「已提交 / 回答正确」＝真答过 → 只做收尾，省掉那次接口调用。
             when (submitState()) {
-                SubmitState.PENDING ->
-                    AppLog.i("④ 判为答过，但「提交作答」还亮着 → 上次没答成，重新作答")
+                SubmitState.PENDING -> {
+                    val n = retriedKeys[key] ?: 0
+                    if (retriedKeys.size > 50) retriedKeys.clear()
+                    retriedKeys[key] = n + 1
+                    when (n) {
+                        0 -> {
+                            // 第一次：上次的**点击多半已经生效、只是提交没做**，所以**只补提交、绝不重复点选项**。
+                            // 关键原因：WebView 的选项是 toggle，重复点会把已选中的**取消**掉
+                            //（实测：60 秒延迟下程序把已勾选的 3 个选项又点了一遍，平台随即"取消作答"）。
+                            AppLog.i("④ 判为答过但按钮仍亮 → 只补一次提交，**不重复点选项**（避免 toggle 取消）")
+                            handler.postDelayed({
+                                submitIfPresent()
+                                handler.postDelayed({ closeAnswerOverlay() }, ANSWER_SETTLE_MS)
+                            }, SUBMIT_DELAY_MS)
+                            bmp.recycle()
+                            busy.set(false)
+                            return
+                        }
+                        1 -> AppLog.i("④ 补提交后按钮仍亮 → 说明上次点击确实没生效，重新完整作答")
+                        else -> {
+                            AppLog.i("④ 已重答过、按钮仍亮 → 只补收尾，不再重复调用接口（防死循环）")
+                            handler.postDelayed({
+                                submitIfPresent()
+                                handler.postDelayed({ closeAnswerOverlay() }, ANSWER_SETTLE_MS)
+                            }, SUBMIT_DELAY_MS)
+                            bmp.recycle()
+                            busy.set(false)
+                            return
+                        }
+                    }
+                }
                 SubmitState.DONE -> {
                     AppLog.i("④ 这道题确实已答成：只跳过 API 调用，收尾动作（提交/关闭）照做")
                     handler.postDelayed({
@@ -480,6 +605,27 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * 同一道题最多「重新作答」几次。
+     *
+     * 为什么必须有：实测某多选界面**提交后按钮文字不变**（一直是「提交作答」），
+     * 于是 `submitState()` 永远返回 PENDING → 每轮都重新作答 → **无限循环、每轮真实调用接口**。
+     * 宁可不重答（少答一道题），也绝不允许这种方式烧接口。
+     */
+    /**
+     * 是否用 root 执行 `input tap` —— **默认关闭，且经复核并不需要**。
+     *
+     * 复核结论（用户现场确认）：真正让选项被勾选的是 **「覆盖该点的最深叶子节点的 ACTION_CLICK」**
+     * （`NodeReader.findDeepestAt` 那条路），**不是 root**。
+     * 此前我从"提交作答按钮仍亮"推断"叶子无效"是**误读**：那个"仍亮"是当时把 `SUBMIT_DELAY_MS`
+     * 临时调成 60 秒导致的（提交还没执行）；后续日志出现 `④ 这道题确实已答成` 正是提交成功的证据。
+     * root 方式保留为**可选兜底**（真机 / 无无障碍权限等场景），默认关闭。
+     */
+    private val USE_ROOT_TAP = false
+
+    private val MAX_RETRY_ANSWER = 1
+    private val retriedKeys = HashMap<String, Int>()
+
     /** 浮层里的答题状态 */
     private enum class SubmitState { PENDING, DONE, UNKNOWN }
 
@@ -495,11 +641,12 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
      *   两者都读不到（浮层正在重绘）→ [SubmitState.UNKNOWN]。
      */
     private fun submitState(): SubmitState {
-        val root = rootInActiveWindow ?: return SubmitState.UNKNOWN
-        if (NodeReader.findTextNodes(root, listOf("提交作答", "提交答案", "确认作答", "提交")).isNotEmpty()) {
+        val roots = allWindowRoots()
+        if (roots.isEmpty()) return SubmitState.UNKNOWN
+        if (NodeReader.findTextNodes(roots, listOf("提交作答", "提交答案", "确认作答", "提交")).isNotEmpty()) {
             return SubmitState.PENDING
         }
-        if (NodeReader.findTextNodes(root, listOf("已提交", "回答正确", "回答错误")).isNotEmpty()) {
+        if (NodeReader.findTextNodes(roots, listOf("已提交", "回答正确", "回答错误")).isNotEmpty()) {
             return SubmitState.DONE
         }
         return SubmitState.UNKNOWN
@@ -513,14 +660,9 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
      */
     private fun submitIfPresent() {
         val words = listOf("提交作答", "提交答案", "确认作答", "提交")
-        val root = rootInActiveWindow
-        if (root == null) {
-            AppLog.w("⑧ 收尾：拿不到节点树，跳过提交")
-            return
-        }
-        for ((node, box) in NodeReader.findTextNodes(root, words)) {
+        for ((node, box) in NodeReader.findTextNodes(allWindowRoots(), words)) {
             val label = node.text?.toString()?.trim().orEmpty()
-            if (box.width() > 0 && tapAt(box.centerX(), box.centerY())) {
+            if (box.width() > 0 && clickAtPoint(box.centerX(), box.centerY(), "提交")) {
                 AppLog.i("⑧ 收尾：已点「$label」提交（坐标 ${box.centerX()},${box.centerY()}）")
                 return
             }
@@ -528,11 +670,10 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
         AppLog.i("⑧ 收尾：本次没有提交按钮（点选即判定的题型），跳过")
     }
 
-    /** 读题时顺带找出「关闭」类按钮，记下它的位置供收尾使用（读不到就清空，避免用到旧坐标）。 */
-    private fun cacheCloseTarget(root: AccessibilityNodeInfo?) {
-        if (root == null) return
+    /** 读题时顺带找出「关闭」类按钮，记下它的位置供收尾使用（跨所有窗口找）。 */
+    private fun cacheCloseTarget(roots: List<AccessibilityNodeInfo?>) {
         val words = listOf("关闭", "继续观看", "继续播放", "继续", "我知道了", "知道了", "确定")
-        for ((node, box) in NodeReader.findTextNodes(root, words)) {
+        for ((node, box) in NodeReader.findTextNodes(roots, words)) {
             if (box.width() > 0 && box.height() > 0) {
                 val label = node.text?.toString()?.trim().orEmpty()
                 cachedClose = label to Rect(box)
@@ -559,22 +700,19 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
             SystemClock.elapsedRealtime() - cachedCloseAt < CLOSE_CACHE_TTL_MS
         ) {
             val (label, box) = cached
-            if (box.width() > 0 && tapAt(box.centerX(), box.centerY())) {
+            if (box.width() > 0 && clickAtPoint(box.centerX(), box.centerY(), "关闭")) {
                 AppLog.i("⑧ 收尾：已点「$label」（坐标 ${box.centerX()},${box.centerY()}，用读题时缓存的按钮位置）")
                 // 不清缓存：这一下未必生效（WebView 未必认这个手势），下一轮补善后还要用；由 TTL 兜底过期
                 return
             }
         }
         val words = listOf("关闭", "继续观看", "继续播放", "继续", "我知道了", "知道了", "确定")
-        val root = rootInActiveWindow
-        if (root != null) {
-            for ((node, box) in NodeReader.findTextNodes(root, words)) {
-                val label = node.text?.toString()?.trim().orEmpty()
-                if (box.width() > 0 && tapAt(box.centerX(), box.centerY())) {
-                    AppLog.i("⑧ 收尾：已点「$label」（坐标 ${box.centerX()},${box.centerY()}）" +
-                        if (attempt > 1) "（第 $attempt 次尝试）" else "")
-                    return
-                }
+        for ((node, box) in NodeReader.findTextNodes(allWindowRoots(), words)) {
+            val label = node.text?.toString()?.trim().orEmpty()
+            if (box.width() > 0 && clickAtPoint(box.centerX(), box.centerY(), "关闭")) {
+                AppLog.i("⑧ 收尾：已点「$label」（坐标 ${box.centerX()},${box.centerY()}）" +
+                    if (attempt > 1) "（第 $attempt 次尝试）" else "")
+                return
             }
         }
         if (attempt < CLOSE_MAX_ATTEMPTS) {
@@ -668,8 +806,59 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
             }
             return false
         }
-        return tapAt(plan.x, plan.y)
+        // 坐标计划：**先在节点树里找「能点的那个节点」用 ACTION_CLICK 点**（它直接作用于目标窗口，
+        // 不受「dispatchGesture 在模拟器上返回成功却不生效」影响），确实找不到才退回坐标手势。
+        return clickAtPoint(plan.x, plan.y, "选项")
     }
+
+    /**
+     * 在某点点击：**优先用无障碍节点点击**，找不到可点节点才退回坐标手势。
+     *
+     * 为什么需要：实测 MuMu 上 `dispatchGesture` 会「返回成功却不生效」——
+     * 日志打 `⑦ 点击结果：已发送`，屏幕上选项/按钮毫无变化；
+     * 而 `performAction(ACTION_CLICK)` 直接作用于目标窗口、不走输入子系统，可靠得多。
+     */
+    private fun clickAtPoint(x: Int, y: Int, label: String): Boolean {
+        val roots = allWindowRoots()
+        // ① 先试**最深叶子节点**：WebView 里 ACTION_CLICK 只有打在叶子上才可能被响应
+        //    （打容器/祖先会「返回 true 却不生效」——选项就是这种情况）
+        val deep = NodeReader.findDeepestAt(roots, x, y)
+        if (deep != null &&
+            runCatching { deep.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+        ) {
+            AppLog.i("   改用无障碍节点点击（$label $x,$y 命中最深叶子）")
+            return true
+        }
+        // ② 再试「覆盖该点、自身可点」的最小节点
+        val hit = NodeReader.findClickableAt(roots, x, y)
+        if (hit != null &&
+            runCatching { hit.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+        ) {
+            AppLog.i("   改用无障碍节点点击（$label $x,$y 命中可点节点）")
+            return true
+        }
+        // ③ 再试 **root 执行 input tap**：MuMu 这类带 root 的模拟器上，
+        //    WebView 选项既不吃 ACTION_CLICK（返回 true 却不生效）、坐标手势又在多 display 下失效，
+        //    `input tap` 是实测唯一有效的注入方式（adb 侧同一条命令已验证生效）。
+        if (USE_ROOT_TAP && rootTap(x, y)) {
+            AppLog.i("   改用 root input tap（$label $x,$y）")
+            return true
+        }
+        // ④ 最后才是坐标手势
+        return tapAt(x, y)
+    }
+
+    /**
+     * 用 root 执行 `input tap`。
+     *
+     * MuMu 的 root 默认放行（本机已开），所以 `su` 不会弹窗；带 3 秒超时兜住"万一弹窗"的情况，
+     * 免得阻塞分析线程。
+     */
+    private fun rootTap(x: Int, y: Int): Boolean = runCatching {
+        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", "input tap $x $y"))
+        p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)
+        true
+    }.getOrDefault(false)
 
     private fun tapAt(x: Int, y: Int): Boolean {
         // 防检测：落点加 ±JITTER_MAX_PX 随机偏移，避免每次都是同一个精确坐标
