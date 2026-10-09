@@ -43,10 +43,17 @@ class MainActivity : Activity() {
     private lateinit var logScroll: ScrollView
     private lateinit var rootScroll: ScrollView
 
+    /** 界面上只显示最近这么多条（完整日志仍在 AppLog 与 logcat 里，长按日志区可复制全部） */
+    private val logUiLines = 25
+
     private val logListener: (List<String>) -> Unit = { lines ->
         ui.post {
-            logText.text = lines.joinToString("\n")
-            logScroll.post { logScroll.fullScroll(ScrollView.FOCUS_DOWN) }
+            // 先判断「用户是不是本来就在底部」，只有贴底时才自动跟随最新：
+            // 否则手动往上翻时会被新日志一次次拽回底部 —— 那样看着就像"不能滚动"。
+            val atBottom = logScroll.height == 0 ||
+                (logScroll.scrollY + logScroll.height) >= (logText.height - 24)
+            logText.text = lines.takeLast(logUiLines).joinToString("\n")
+            if (atBottom) logScroll.post { logScroll.fullScroll(ScrollView.FOCUS_DOWN) }
         }
     }
 
@@ -130,6 +137,7 @@ class MainActivity : Activity() {
         // 保证每次进入都停在页面顶部（日志区变长时不该把界面顶到底部）
         rootScroll.post { rootScroll.fullScroll(ScrollView.FOCUS_UP) }
         ui.post(statusTicker)
+        showStartupNotice()
     }
 
     override fun onDestroy() {
@@ -316,6 +324,29 @@ class MainActivity : Activity() {
         loadPrefs()
         AppLog.i("— 已选模型 ${m.id}：${if (vision) "支持图片，已打开视觉模式（会发送屏幕截图）" else "纯文本模型，已关闭视觉模式"}；$effortNote")
         toast("已选 ${m.id}")
+    }
+
+    /**
+     * 启动告示弹窗。
+     *
+     * **故意把文案硬编码在这里**（不放进 `strings.xml`、不读 `Prefs`、不读 config.json）：
+     * 这样二次打包的人不容易把它改掉或删掉。它是给"**付费**买到这个软件"的人看的 ——
+     * 本项目以 PolyForm Noncommercial 1.0.0 发布，任何人售卖它都违反许可证。
+     */
+    private fun showStartupNotice() {
+        val text = buildString {
+            append("本软件【免费且源码公开】（PolyForm Noncommercial License 1.0.0），禁止任何商业使用。\n\n")
+            append("如果你是【花钱】得到的它，说明有人在拿它牟利 —— 这违反了许可证。\n")
+            append("建议你向出售方所在的平台或应用商店【举报】，并要求退款。\n\n")
+            append("作者从未在任何平台售卖过本软件。\n\n")
+            append("（本告示由程序内置、不读取任何配置；删改它同样违反许可证。）")
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("⚠️ 请先读这段告示")
+            .setMessage(text)
+            .setCancelable(false)                       // 必须点「我已阅读」，避免被忽略
+            .setPositiveButton("我已阅读") { _, _ -> }
+            .show()
     }
 
     private fun toast(msg: String) {

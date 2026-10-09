@@ -33,6 +33,19 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
 
     /** 点完答案后等多久再关结果浮层 —— 留给平台渲染判定结果（对齐桌面版的 settle_after_click_ms） */
     private val ANSWER_SETTLE_MS = 1200L
+
+    /** 点完选项后等多久再找「提交作答」——有些题型（智慧树「AI 随堂练习」）选完必须提交才判定 */
+    private val SUBMIT_DELAY_MS = 700L
+
+    /**
+     * 点击坐标的最大随机偏移（像素），**防检测**。
+     *
+     * 每次都在元素正中心、且同一按钮每次落在同一个整数坐标，是自动化最明显的特征之一。
+     * 取 10px：实测本类界面的可点元素都远大于它 —— 选项框约 828×135、"提交作答"约 852×144、
+     * 连最小的「关闭」也有 87×45（半高 22px），所以 ±10 不会偏到相邻选项。
+     */
+    private val JITTER_MAX_PX = 10
+    private val jitterRandom = java.util.Random()
     private val busy = AtomicBoolean(false)
     private var pending: Runnable? = null
 
@@ -402,14 +415,41 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
                 AppLog.i("⑦ 点击结果：${if (one) "已发送" else "失败"} —— ${plan.how}")
             }
             if (ok) {
-                // 答完收尾：等结果浮层渲染出来，再把「关闭」点掉。
-                // 不做这一步，浮层会一直挡着视频，而且之后每轮轮询都会重复看到这道题（只能靠去重压着）。
-                handler.postDelayed({ closeAnswerOverlay() }, ANSWER_SETTLE_MS)
+                // 答完收尾分两步：
+                //   ① 有些题型选完必须点「提交作答」才判定（实测智慧树「AI 随堂练习」的单选题）；
+                //   ② 等判定结果渲染出来再点「关闭」，免得浮层一直挡着视频、之后每轮轮询都重复看到这道题。
+                handler.postDelayed({
+                    submitIfPresent()
+                    handler.postDelayed({ closeAnswerOverlay() }, ANSWER_SETTLE_MS)
+                }, SUBMIT_DELAY_MS)
             }
         } finally {
             markProcessed(prefs, key, r.ok)
             busy.set(false)
         }
+    }
+
+    /**
+     * 点完选项后，屏幕上若有「提交作答」这类按钮就点它。
+     *
+     * 实测：智慧树的「AI 随堂练习」（单选题 + 大按钮）**选完必须提交才判定**；
+     * 弹题浮层那种则是点选即判定、没有提交按钮 —— 所以这里「有就点、没有就跳过」。
+     */
+    private fun submitIfPresent() {
+        val words = listOf("提交作答", "提交答案", "确认作答", "提交")
+        val root = rootInActiveWindow
+        if (root == null) {
+            AppLog.w("⑧ 收尾：拿不到节点树，跳过提交")
+            return
+        }
+        for ((node, box) in NodeReader.findTextNodes(root, words)) {
+            val label = node.text?.toString()?.trim().orEmpty()
+            if (box.width() > 0 && tapAt(box.centerX(), box.centerY())) {
+                AppLog.i("⑧ 收尾：已点「$label」提交（坐标 ${box.centerX()},${box.centerY()}）")
+                return
+            }
+        }
+        AppLog.i("⑧ 收尾：本次没有提交按钮（点选即判定的题型），跳过")
     }
 
     /** 答完后的收尾：把结果浮层关掉（点「关闭」这类短按钮；节点点不动就按 bounds 中心坐标点）。 */
@@ -520,8 +560,14 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
     }
 
     private fun tapAt(x: Int, y: Int): Boolean {
+        // 防检测：落点加 ±JITTER_MAX_PX 随机偏移，避免每次都是同一个精确坐标
+        val jx = x + jitterRandom.nextInt(JITTER_MAX_PX * 2 + 1) - JITTER_MAX_PX
+        val jy = y + jitterRandom.nextInt(JITTER_MAX_PX * 2 + 1) - JITTER_MAX_PX
+        if (jx != x || jy != y) {
+            AppLog.i("   落点抖动：($x,$y) → ($jx,$jy)（防检测 ±$JITTER_MAX_PX px）")
+        }
         return runCatching {
-            val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+            val path = Path().apply { moveTo(jx.toFloat(), jy.toFloat()) }
             val stroke = GestureDescription.StrokeDescription(path, 0L, 60L)
             val gesture = GestureDescription.Builder().addStroke(stroke).build()
             dispatchGesture(gesture, null, null)
