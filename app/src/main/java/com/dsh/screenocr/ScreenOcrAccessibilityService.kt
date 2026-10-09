@@ -38,6 +38,29 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
     private val SUBMIT_DELAY_MS = 700L
 
     /**
+     * 收尾找「关闭」的重试次数与间隔。
+     * 为什么必须重试：实测答题后 WebView 会短暂重绘，那一刻节点树里**连「关闭」和选项都消失**
+     * （日志表现为「收尾：没找到关闭类按钮」+「依据：无；选项 0 个」），一两秒后才回来。
+     * 只赌一次就会漏关浮层 —— 16416 实例上实测踩到过。
+     */
+    private val CLOSE_MAX_ATTEMPTS = 4
+    private val CLOSE_RETRY_MS = 1500L
+
+    /** 缓存的「关闭」按钮位置最多用这么久（避免拿上一次弹题的坐标去点） */
+    private val CLOSE_CACHE_TTL_MS = 30_000L
+
+    /**
+     * 读题那一刻缓存下来的「关闭」类按钮（label + 屏幕坐标）。
+     *
+     * 为什么必须有它：实测**点完选项后浮层会从无障碍树里彻底消失**（屏幕上还在，用户截图可见），
+     * 那一刻实时查找必然失败 —— 重试多少次都没用（16416 实例实测重试 4 次全败，
+     * 日志同时打「没找到关闭」和「选项 0 个」）。
+     * 而同一道题的浮层里「关闭」位置不会变，所以在**读题时**先把它记下来，收尾直接用。
+     */
+    private var cachedClose: Pair<String, Rect>? = null
+    private var cachedCloseAt = 0L
+
+    /**
      * 点击坐标的最大随机偏移（像素），**防检测**。
      *
      * 每次都在元素正中心、且同一按钮每次落在同一个整数坐标，是自动化最明显的特征之一。
@@ -250,8 +273,11 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
                         AppLog.i("② 截图成功 ${bmp.width}x${bmp.height}")
                         // 识别来源：**无障碍节点树优先**（原生控件与 WebView 都能读，且不受模拟器截图黑图影响），
                         // 节点树读不到可用文字时才回退 OCR。两者产出同一种 OcrResult，判题与点击逻辑完全共用。
-                        val fromNodes = NodeReader.toOcrResult(rootInActiveWindow, bmp.width, bmp.height)
+                        val rootNow = rootInActiveWindow
+                        val fromNodes = NodeReader.toOcrResult(rootNow, bmp.width, bmp.height)
                         if (fromNodes != null) {
+                            // 读得到题目的这一刻，「关闭」按钮一定也在树里 —— 先把它记下来给收尾用
+                            cacheCloseTarget(rootNow)
                             AppLog.i("③ 识别来源：无障碍节点树（${fromNodes.lines.size} 行文本，免 OCR）")
                             handleOcrResult(prefs, fromNodes, bmp)
                         } else {
@@ -326,10 +352,35 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
         val now = System.currentTimeMillis()
         val key = questionKey(q)
         if (isRecentlyAnswered(key, now, prefs.dedupSeconds * 1000L)) {
-            AppLog.i("④ 这道题刚刚答过，跳过（去重窗口 ${prefs.dedupSeconds}s）")
-            bmp.recycle()
-            busy.set(false)
-            return
+            // 去重只说明"记录里处理过"，**不代表真的答上了**：上一次可能只点中了选项、提交却失败
+            //   （点完选项后浮层会从无障碍树里消失，实测踩到过）。
+            // 所以先看浮层里的按钮：还亮着「提交作答」＝没答成 → **重新走一遍完整答题**；
+            // 显示「已提交 / 回答正确」＝真答过 → 只做收尾，省掉那次接口调用。
+            when (submitState()) {
+                SubmitState.PENDING ->
+                    AppLog.i("④ 判为答过，但「提交作答」还亮着 → 上次没答成，重新作答")
+                SubmitState.DONE -> {
+                    AppLog.i("④ 这道题确实已答成：只跳过 API 调用，收尾动作（提交/关闭）照做")
+                    handler.postDelayed({
+                        submitIfPresent()
+                        handler.postDelayed({ closeAnswerOverlay() }, ANSWER_SETTLE_MS)
+                    }, SUBMIT_DELAY_MS)
+                    bmp.recycle()
+                    busy.set(false)
+                    return
+                }
+                SubmitState.UNKNOWN -> {
+                    // 读不到答题状态（浮层多半正在重绘）：不猜，只补收尾，避免白花一次接口调用
+                    AppLog.i("④ 判为答过、且读不到答题状态：只补收尾，不重复调用接口")
+                    handler.postDelayed({
+                        submitIfPresent()
+                        handler.postDelayed({ closeAnswerOverlay() }, ANSWER_SETTLE_MS)
+                    }, SUBMIT_DELAY_MS)
+                    bmp.recycle()
+                    busy.set(false)
+                    return
+                }
+            }
         }
 
         // 只有确定要调接口了才编码图片；JPEG 压缩放后台线程，不占主线程
@@ -429,6 +480,31 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** 浮层里的答题状态 */
+    private enum class SubmitState { PENDING, DONE, UNKNOWN }
+
+    /**
+     * 读浮层里的按钮，判断这道题**是否真的答成了**。
+     *
+     * 为什么需要：去重记录只能说明"处理过"，不能说明"提交成功" —— 点完选项后浮层会从无障碍树里消失、
+     * 提交常常失败，而记录此时已经写下，光看去重就会把**没答成的题**当成答过
+     * （实测：两道题被跳过，学习记录里仍是未作答）。
+     *
+     * 判据（都用节点文本精确匹配，实测这些文案就是整节点文本）：
+     *   还亮着「提交作答」→ [SubmitState.PENDING]；显示「已提交 / 回答正确 / 回答错误」→ [SubmitState.DONE]；
+     *   两者都读不到（浮层正在重绘）→ [SubmitState.UNKNOWN]。
+     */
+    private fun submitState(): SubmitState {
+        val root = rootInActiveWindow ?: return SubmitState.UNKNOWN
+        if (NodeReader.findTextNodes(root, listOf("提交作答", "提交答案", "确认作答", "提交")).isNotEmpty()) {
+            return SubmitState.PENDING
+        }
+        if (NodeReader.findTextNodes(root, listOf("已提交", "回答正确", "回答错误")).isNotEmpty()) {
+            return SubmitState.DONE
+        }
+        return SubmitState.UNKNOWN
+    }
+
     /**
      * 点完选项后，屏幕上若有「提交作答」这类按钮就点它。
      *
@@ -452,25 +528,61 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
         AppLog.i("⑧ 收尾：本次没有提交按钮（点选即判定的题型），跳过")
     }
 
-    /** 答完后的收尾：把结果浮层关掉（点「关闭」这类短按钮；节点点不动就按 bounds 中心坐标点）。 */
-    private fun closeAnswerOverlay() {
+    /** 读题时顺带找出「关闭」类按钮，记下它的位置供收尾使用（读不到就清空，避免用到旧坐标）。 */
+    private fun cacheCloseTarget(root: AccessibilityNodeInfo?) {
+        if (root == null) return
         val words = listOf("关闭", "继续观看", "继续播放", "继续", "我知道了", "知道了", "确定")
-        val root = rootInActiveWindow
-        if (root == null) {
-            AppLog.w("⑧ 收尾：拿不到节点树，跳过关闭")
-            return
-        }
-        // 定位按钮用与读题相同的**子节点遍历**（WebView 里按文本查找的 API 找不到，坑点 #37）；
-        // 但点击一律走**坐标**：实测 WebView 上 `ACTION_CLICK` 会「返回成功却不生效」
-        // （日志打了「已点关闭」但浮层还在），而坐标点在选项与按钮上都实测命中。
         for ((node, box) in NodeReader.findTextNodes(root, words)) {
-            val label = node.text?.toString()?.trim().orEmpty()
-            if (box.width() > 0 && tapAt(box.centerX(), box.centerY())) {
-                AppLog.i("⑧ 收尾：已点「$label」（坐标 ${box.centerX()},${box.centerY()}）")
+            if (box.width() > 0 && box.height() > 0) {
+                val label = node.text?.toString()?.trim().orEmpty()
+                cachedClose = label to Rect(box)
+                cachedCloseAt = SystemClock.elapsedRealtime()
+                AppLog.i("   已缓存「$label」位置 (${box.centerX()},${box.centerY()})，供收尾使用")
                 return
             }
         }
-        AppLog.i("⑧ 收尾：没找到「关闭」类按钮（浮层可能已自行消失）")
+        // 这里**绝不能清空缓存**：点完选项后浮层会从无障碍树里消失，之后每轮读题都会走到这里；
+        // 一旦清空，收尾就没坐标可用（实测踩过：日志里"已缓存"与"第 1 次没找到关闭"同时出现）。
+        // 旧坐标由 CLOSE_CACHE_TTL_MS 兜底过期。
+    }
+
+    /**
+     * 答完后的收尾：把结果浮层关掉。
+     *
+     * ① 先用**读题时缓存的按钮位置** —— 点完选项后浮层常从无障碍树里消失，实时查找会失败；
+     * ② 再实时查找（「找哪个」用子节点遍历，坑点 #37；「怎么点」一律走坐标，坑点 #38），
+     *    并最多重试 [CLOSE_MAX_ATTEMPTS] 次兜住 WebView 重绘间隙（坑点 #41）。
+     */
+    private fun closeAnswerOverlay(attempt: Int = 1) {
+        val cached = cachedClose
+        if (attempt == 1 && cached != null &&
+            SystemClock.elapsedRealtime() - cachedCloseAt < CLOSE_CACHE_TTL_MS
+        ) {
+            val (label, box) = cached
+            if (box.width() > 0 && tapAt(box.centerX(), box.centerY())) {
+                AppLog.i("⑧ 收尾：已点「$label」（坐标 ${box.centerX()},${box.centerY()}，用读题时缓存的按钮位置）")
+                // 不清缓存：这一下未必生效（WebView 未必认这个手势），下一轮补善后还要用；由 TTL 兜底过期
+                return
+            }
+        }
+        val words = listOf("关闭", "继续观看", "继续播放", "继续", "我知道了", "知道了", "确定")
+        val root = rootInActiveWindow
+        if (root != null) {
+            for ((node, box) in NodeReader.findTextNodes(root, words)) {
+                val label = node.text?.toString()?.trim().orEmpty()
+                if (box.width() > 0 && tapAt(box.centerX(), box.centerY())) {
+                    AppLog.i("⑧ 收尾：已点「$label」（坐标 ${box.centerX()},${box.centerY()}）" +
+                        if (attempt > 1) "（第 $attempt 次尝试）" else "")
+                    return
+                }
+            }
+        }
+        if (attempt < CLOSE_MAX_ATTEMPTS) {
+            AppLog.i("⑧ 收尾：第 $attempt 次没找到「关闭」（可能是重绘间隙）→ ${CLOSE_RETRY_MS}ms 后重试")
+            handler.postDelayed({ closeAnswerOverlay(attempt + 1) }, CLOSE_RETRY_MS)
+        } else {
+            AppLog.i("⑧ 收尾：重试 $attempt 次仍未找到「关闭」类按钮（浮层可能已自行消失）")
+        }
     }
 
     /**
