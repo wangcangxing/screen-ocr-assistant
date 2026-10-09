@@ -327,26 +327,75 @@ class MainActivity : Activity() {
     }
 
     /**
+     * 官方 release 包的签名 SHA-256（用 `apksigner verify --print-certs` 取得）。
+     *
+     * **为什么靠签名**：Android 不允许同一个包名存在两个签名，所以任何改动过的 APK 都**必须重新签名** ——
+     * 于是「签名对不上」就等价于「这个包被第三方重新打包过」，正是「改掉告示再拿去卖」的场景。
+     * 二次打包者当然也能把这段校验 patch 掉，但那比删一行文案难得多，而且他得同时做两件事。
+     */
+    private val OFFICIAL_SIGNATURE_SHA256 =
+        "8d09734c18c27c0cdc229532b571ea416f44ce57b67228f46c67da1d4ccc6aa7"
+
+    private val OFFICIAL_REPO = "https://github.com/wangcangxing/screen-ocr-assistant"
+
+    /** 当前安装包的签名 SHA-256（十六进制小写）；取不到时返回空串 */
+    private fun currentSignatureSha256(): String = runCatching {
+        val pm = packageManager
+        val certs = if (android.os.Build.VERSION.SDK_INT >= 28) {
+            pm.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+                .signingInfo?.apkContentsSigners
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNATURES).signatures
+        }
+        val first = certs?.firstOrNull() ?: return ""
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(first.toByteArray()).joinToString("") { "%02x".format(it) }
+    }.getOrDefault("")
+
+    /** 是否为官方构建；debug 构建不参与校验，避免误伤自己编译的人 */
+    private fun isOfficialBuild(): Boolean {
+        val debuggable = (applicationInfo.flags and
+            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debuggable) return true
+        val cur = currentSignatureSha256()
+        return cur.isEmpty() || cur.equals(OFFICIAL_SIGNATURE_SHA256, ignoreCase = true)
+    }
+
+    /**
      * 启动告示弹窗。
      *
      * **故意把文案硬编码在这里**（不放进 `strings.xml`、不读 `Prefs`、不读 config.json）：
-     * 这样二次打包的人不容易把它改掉或删掉。它是给"**付费**买到这个软件"的人看的 ——
+     * 这样二次打包的人不容易顺手改掉。它是给「**付费**买到这个软件」的人看的 ——
      * 本项目以 PolyForm Noncommercial 1.0.0 发布，任何人售卖它都违反许可证。
+     *
+     * 签名对不上时显示**更硬的版本**：告诉用户这个包被第三方重打包过、别付钱、去举报。
      */
     private fun showStartupNotice() {
-        val text = buildString {
+        val official = isOfficialBuild()
+        val text = if (official) buildString {
             append("本软件【免费且源码公开】（PolyForm Noncommercial License 1.0.0），禁止任何商业使用。\n\n")
             append("如果你是【花钱】得到的它，说明有人在拿它牟利 —— 这违反了许可证。\n")
             append("建议你向出售方所在的平台或应用商店【举报】，并要求退款。\n\n")
-            append("作者从未在任何平台售卖过本软件。\n\n")
+            append("作者从未在任何平台售卖过本软件。唯一官方发布地址：\n$OFFICIAL_REPO\n\n")
             append("（本告示由程序内置、不读取任何配置；删改它同样违反许可证。）")
+        } else buildString {
+            append("【本安装包的签名与官方版本不一致 —— 它被第三方重新打包过。】\n\n")
+            append("官方版本完全免费、源码公开；作者从未在任何平台售卖，也没有任何付费版或授权码。\n")
+            append("如果你为它付过钱：请立即向出售方所在平台【举报】并要求退款。\n\n")
+            append("官方唯一发布地址：\n$OFFICIAL_REPO\n\n")
+            append("可自行核对：apksigner verify --print-certs 你手上的.apk\n")
+            append("官方签名 SHA-256 = $OFFICIAL_SIGNATURE_SHA256")
         }
         android.app.AlertDialog.Builder(this)
-            .setTitle("⚠️ 请先读这段告示")
+            .setTitle(if (official) "⚠️ 请先读这段告示" else "⛔ 本应用已被第三方重新打包")
             .setMessage(text)
-            .setCancelable(false)                       // 必须点「我已阅读」，避免被忽略
-            .setPositiveButton("我已阅读") { _, _ -> }
+            .setCancelable(false)                       // 必须点掉，避免被忽略
+            .setPositiveButton(if (official) "我已阅读" else "我知道了") { _, _ -> }
             .show()
+        if (!official) {
+            AppLog.w("本安装包签名与官方不一致（当前 ${currentSignatureSha256()}）—— 疑似被第三方重新打包")
+        }
     }
 
     private fun toast(msg: String) {
