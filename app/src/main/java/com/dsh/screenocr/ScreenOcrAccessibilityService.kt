@@ -694,7 +694,23 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
      * ② 再实时查找（「找哪个」用子节点遍历，坑点 #37；「怎么点」一律走坐标，坑点 #38），
      *    并最多重试 [CLOSE_MAX_ATTEMPTS] 次兜住 WebView 重绘间隙（坑点 #41）。
      */
+    /**
+     * 「关闭」的点击冷却。
+     *
+     * 为什么需要：多条收尾路径（正常答题后的收尾、去重命中后的补收尾）会各排一个收尾任务，
+     * 于是「关闭」被连点两次 —— **第二次浮层已经没了，就点在视频页上**，
+     * 误触返回、一路退到桌面（实测踩到过）。冷却期内的收尾直接跳过。
+     */
+    private val CLOSE_COOLDOWN_MS = 3000L
+    private var lastCloseAt = 0L
+
     private fun closeAnswerOverlay(attempt: Int = 1) {
+        val nowMs = SystemClock.elapsedRealtime()
+        if (nowMs - lastCloseAt < CLOSE_COOLDOWN_MS) {
+            AppLog.i("   刚点过「关闭」（${nowMs - lastCloseAt}ms 前），本次跳过，避免重复点击误触")
+            return
+        }
+        lastCloseAt = nowMs
         val cached = cachedClose
         if (attempt == 1 && cached != null &&
             SystemClock.elapsedRealtime() - cachedCloseAt < CLOSE_CACHE_TTL_MS
