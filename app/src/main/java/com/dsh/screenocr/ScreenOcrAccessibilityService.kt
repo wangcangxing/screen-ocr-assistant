@@ -110,6 +110,9 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
     /** v1.4：是否有一次"强制收尾校验"已在排队（防止每次已答事件都排一次，形成调度风暴） */
     private var finishRetryPending = false
 
+    /** v1.4：上一次打过的当前题号（只在变化时打 `PAGE#`，便于与平台显示的题号对账） */
+    private var lastLoggedQuestionNo = 0
+
     /** v1.4：待执行的强制收尾校验（在 onOcr 里置位，在下一轮 analyze 开头 busy 已释放时执行） */
     private var pendingFinishCheck = false
 
@@ -2036,7 +2039,7 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
                         " → ${if (currentQuestionNo in 1 until paperTotalN) "还有题要答" else "已在最后一题"}")
                 }
                 // v1.4（用户口径）：**不关面板，直接进判定/提交**。
-                // 依据：① 提交本身会让面板自动关闭（实measure：点「提交作业」→「确认提交」后页面切走）；
+                // 依据：① 提交本身会让面板自动关闭（实测：点「提交作业」→「确认提交」后页面切走）；
                 // ② 关面板这一步在这台真机上根本关不掉（坐标点 4 次都在打 y=343），却把整个收尾卡死
                 //    —— `题卡面板关不掉` → 校验提前 return → 永远不提交。
                 // 所以这里直接调 onCardCounted（它在该提交时会点「提交作业」）。
@@ -2343,13 +2346,24 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
      *
      * 为什么用题号而不是内容：题号是平台渲染的稳定身份，不随页内滚动、OCR 抖动变化，
      * 也不依赖"App 自己点过几题"的账本（那个在用户手动答过的卷子上永远是 0）。
+     *
+     * v1.4 诊断：**每次读到题号都打一行 `PAGE#`**。之所以要打，是因为真机出现过
+     * "用户看到第 8 题没答、App 日志却说第 8 题已答"的对不上账 —— 没有这行就无法判断
+     * 到底是 App 读错了题号、还是把别的题当成了这一题。只在**题号变化**时打印，避免刷屏。
      */
     private fun parseCurrentQuestionNo(res: OcrResult): Int {
         for (line in res.lines) {
             val t = line.text.trim()
             val m = QUESTION_NO_LINE.find(t) ?: continue
             val n = Regex("^\\d{1,3}").find(m.value)?.value?.toIntOrNull() ?: continue
-            if (n > 0) return n
+            if (n > 0) {
+                // 只在题号变化时打一行，便于把"App 以为在第几题"与"用户在平台上看到第几题"对上账
+                if (n != lastLoggedQuestionNo) {
+                    lastLoggedQuestionNo = n
+                    AppLog.i("PAGE# 当前题号=$n（读到「${t.take(30)}」）")
+                }
+                return n
+            }
         }
         return 0
     }

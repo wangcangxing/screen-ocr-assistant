@@ -264,17 +264,30 @@ object NodeReader {
 
             val isLabel = LETTER.matches(cur.text) && cur.box.width() <= LETTER_MAX_W
             if (isLabel) {
+                // 正文必须在**标签右侧**（选项页是两列：左侧标签、右侧正文），且取水平距离最近的那个。
+                //
+                // v1.4 修复（真机实测，第二章单元测试第 8 题）：原来只判"同一行 + 不是标签"就认正文，
+                // 不看左右。题目是 `A Python / B Java / C C++ / D C` —— 值列里有个正文恰好就是字母 **"C"**，
+                // 于是排序后先遇到的标签 `C` 把**同一行的值列 `C++`** 抢走；等到标签 `D` 时，
+                // 值列那个 `C` 已被占用 → **选项 D 整条丢失**（App 只认出 A/B/C 三项）。
+                // 后果：模型答 D（内容 "C"）时，App 把 "C++" 当成 C、去点 **C++** 那一行，
+                // 平台侧第 8 题**始终没被作答**（用户截图：四个选项都没选中），而 App 却记为已答。
+                // 加上"必须在右侧 + 取最近"后，`C` 配对 `C++`、`D` 配对 `C`，四项齐全。
                 var body: Item? = null
+                var bestDx = Int.MAX_VALUE
                 for (k in i + 1 until sorted.size) {
                     if (used[k]) continue
                     val cand = sorted[k]
                     if (Math.abs(cand.box.centerY() - cur.box.centerY()) > SAME_ROW_PX) continue
-                    if (!LETTER.matches(cand.text) && cand.text !in NOISE) {
+                    if (cand.box.left < cur.box.right - 4) continue          // 要求落在标签右侧
+                    if (LETTER.matches(cand.text) || cand.text in NOISE) continue
+                    val dx = cand.box.left - cur.box.right
+                    if (dx < bestDx) {
+                        bestDx = dx
                         body = cand
-                        used[k] = true
-                        break
                     }
                 }
+                if (body != null) used[sorted.indexOf(body)] = true
                 used[i] = true
                 val text = if (body != null) "${cur.text}. ${body.text}" else cur.text
                 val box = if (body != null) Rect(cur.box).apply { union(body.box) } else cur.box
