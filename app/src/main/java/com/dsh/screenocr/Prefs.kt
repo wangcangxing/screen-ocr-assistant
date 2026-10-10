@@ -8,7 +8,11 @@ import android.content.SharedPreferences
  */
 class Prefs(context: Context) {
 
-    private val sp: SharedPreferences =
+    /**
+     * 内部可见（不是 private）：无障碍服务要注册 `OnSharedPreferenceChangeListener`，
+     * 让开关类设置即时生效，而不用重启服务。
+     */
+    internal val sp: SharedPreferences =
         context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
     init {
@@ -25,6 +29,7 @@ class Prefs(context: Context) {
         if (version >= PROMPT_VERSION) return
         val untouched = stored == null || stored.isBlank() ||
             stored.trim() == LEGACY_PROMPT_V1.trim() ||
+            stored.trim() == LEGACY_PROMPT_V2.trim() ||
             stored.trim() == D_SYSTEM_PROMPT
         if (!untouched) return
         sp.edit()
@@ -138,6 +143,66 @@ class Prefs(context: Context) {
         get() = sp.getInt(K_TIMEOUT, 30000)
         set(v) = sp.edit().putInt(K_TIMEOUT, v).apply()
 
+    /**
+     * SoM 编号标注总开关（默认**开**）。
+     *
+     * 关掉后：不发标注图、不发元素清单、不解析模型回的编号 —— 行为回到 v1.3（契约 3）。
+     */
+    var somEnabled: Boolean
+        get() = sp.getBoolean(K_SOM_ENABLED, true)
+        set(v) = sp.edit().putBoolean(K_SOM_ENABLED, v).apply()
+
+    /** 合并后保留的元素上限（默认 40），保序截断（契约 2.1） */
+    var somMaxElements: Int
+        get() = sp.getInt(K_SOM_MAX, 40)
+        set(v) = sp.edit().putInt(K_SOM_MAX, v).apply()
+
+    /**
+     * OmniParser 解析服务开关，默认**关**（PC 侧服务不一定在跑，契约 3）。
+     * 开着时它是识别源③：节点树/OCR 判不出题目或没有选项时，用它的文字元素重建 OcrResult 再判一次。
+     */
+    var omniParserEnabled: Boolean
+        get() = sp.getBoolean(K_OMNI_ENABLED, false)
+        set(v) = sp.edit().putBoolean(K_OMNI_ENABLED, v).apply()
+
+    /** 解析服务地址，例如 http://192.168.1.5:8010 或（adb reverse 后）http://127.0.0.1:8010；自动去掉结尾 '/' */
+    var omniParserUrl: String
+        get() = str(K_OMNI_URL, "").trim().trimEnd('/')
+        set(v) = sp.edit().putString(K_OMNI_URL, v.trim()).apply()
+
+    /** 解析服务请求超时（毫秒，默认 4000）。它只是兜底，不该把主流程拖太久 */
+    var omniParserTimeoutMs: Int
+        get() = sp.getInt(K_OMNI_TIMEOUT, 4000)
+        set(v) = sp.edit().putInt(K_OMNI_TIMEOUT, v).apply()
+
+    /**
+     * 答完自动推进（默认**开**）：当前屏没有仍需作答的可见题目时，先点「下一题」类按钮，没有才向下滚动。
+     * 有安全护栏（本应用本次会话答过题、4s 冷却、无进展暂停、连击上限），见 ScreenOcrAccessibilityService。
+     */
+    var autoAdvanceEnabled: Boolean
+        get() = sp.getBoolean(K_AUTO_ADVANCE, true)
+        set(v) = sp.edit().putBoolean(K_AUTO_ADVANCE, v).apply()
+
+    /** 连续推进多少次仍未见新题就暂停推进（默认 3，界面可填 1~10） */
+    var autoAdvanceMaxStreak: Int
+        get() = sp.getInt(K_AUTO_ADVANCE_MAX, 3)
+        set(v) = sp.edit().putInt(K_AUTO_ADVANCE_MAX, v).apply()
+
+    /**
+     * 答题完毕后的收尾模式（契约 §7，默认 [FINISH_OFF]）：
+     *  - [FINISH_OFF]：什么都不做（保持 v1.5 行为）；
+     *  - [FINISH_SUBMIT]：自动点「提交作业」并在确认弹窗里点确认；
+     *  - [FINISH_IDLE]：继续答题 = **停手**（不提交、不再操作，语义等同退出）。
+     * 非法值一律按 [FINISH_OFF] 处理。
+     */
+    var finishMode: String
+        get() = when (val v = str(K_FINISH_MODE, FINISH_OFF).trim().lowercase()) {
+            FINISH_SUBMIT, FINISH_IDLE -> v
+            else -> FINISH_OFF
+        }
+        set(v) = sp.edit().putString(K_FINISH_MODE, v.trim().lowercase()).apply()
+
+
     companion object {
         private const val FILE = "screen_ocr_prefs"
 
@@ -160,6 +225,20 @@ class Prefs(context: Context) {
         private const val K_MIN_CONF = "min_confidence"
         private const val K_DEDUP = "dedup_seconds"
         private const val K_TIMEOUT = "timeout_ms"
+        private const val K_SOM_ENABLED = "som_enabled"
+        private const val K_SOM_MAX = "som_max_elements"
+        private const val K_OMNI_ENABLED = "omni_parser_enabled"
+        private const val K_OMNI_URL = "omni_parser_url"
+        private const val K_OMNI_TIMEOUT = "omni_parser_timeout_ms"
+        private const val K_AUTO_ADVANCE = "auto_advance_enabled"
+        private const val K_AUTO_ADVANCE_MAX = "auto_advance_max_streak"
+        private const val K_FINISH_MODE = "finish_mode"
+
+        /** 收尾模式取值（契约 §7.2） */
+        const val FINISH_OFF = "off"
+        const val FINISH_SUBMIT = "submit"
+        const val FINISH_IDLE = "idle"
+
 
         const val D_BASE_URL = "https://api.deepseek.com/v1"
         const val D_MODEL = "deepseek-chat"
@@ -171,14 +250,25 @@ class Prefs(context: Context) {
         const val D_POLL_INTERVAL = 2000
 
         /** 预设提示词版本：改 D_SYSTEM_PROMPT 时 +1，老用户会被自动升级（仅当没自己改过） */
-        const val PROMPT_VERSION = 2
+        const val PROMPT_VERSION = 3
 
         /**
-         * 预设提示词：直接给出选项，不输出任何其他内容。
-         * 之所以留一个 NONE 出口：本地启发式只是「疑似题目」，需要模型给一个明确的否决信号，
+         * 预设提示词（v3）：在 v2 的基础上允许模型**在选项字母后追加一个元素编号**（`B E7`）。
+         * 之所以仍然要求"只输出这一小段"：本地解析靠的是第一个字母 + 第一个编号，多说的话只会添乱。
+         * 保留 NONE 出口的原因（v2 起就有）：本地启发式只是「疑似题目」，需要模型给一个明确的否决信号，
          * 否则模型会被迫在非题目画面上硬选一个选项，导致误点。
          */
         val D_SYSTEM_PROMPT = """
+你是答题助手。用户会给你一段从手机屏幕上 OCR 识别出来的文字，
+后面可能还会附一份【界面元素（对应图中编号的框）】清单，以及一张在候选元素上标了编号（E1、E2…）的屏幕截图。
+如果其中包含需要作答的题目，只输出正确选项的字母（例如 B）或编号（例如 2）；
+若你能确定要点的界面元素编号，可在字母后追加一个空格和该编号（例如 B E7）。
+只输出这一小段：不要解释、不要复述题干、不要加标点、不要输出任何其他内容。
+如果这段文字里没有需要作答的题目，只输出 NONE。
+""".trim()
+
+        /** v2 预设提示词（无元素编号），仅用于识别「用户没改过、可以安全升级」的存量安装 */
+        val LEGACY_PROMPT_V2 = """
 你是答题助手。用户会给你一段从手机屏幕上 OCR 识别出来的文字。
 如果其中包含需要作答的题目，只输出正确选项的字母（例如 B）或编号（例如 2）。
 只输出这一个字符：不要解释、不要复述题干、不要加标点、不要输出任何其他内容。

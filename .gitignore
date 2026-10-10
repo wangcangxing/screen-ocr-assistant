@@ -14,3 +14,22 @@ __pycache__/
 *.pyc
 tools/mock-requests.log
 tools/mock-received-image.jpg
+
+# OmniParser 解析服务：虚拟环境、模型权重（约 1.5 GB，靠脚本下载，绝不入库）、运行留痕
+omniparser-service/.venv/
+omniparser-service/weights/
+omniparser-service/run/
+.venv/
+*.egg-info/
+
+# 独立验证的临时产物（结论写进 verify/验证报告.md，原始大图不入库）
+verify/out/
+
+# 真机验收的临时产物（logcat / 截图 / 配置变体；结论写进报告）
+tools/acceptance-out/
+
+# 排查死锁时用的一次性探查文件（ui dump / 临时截图 / 复现脚本），绝不入库
+tools/_*.xml
+tools/_*.png
+tools/_*.py
+tools/_*.txt

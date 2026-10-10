@@ -122,6 +122,47 @@ object NodeReader {
     }
 
     /**
+     * 同 [findTextNodes]，但用**谓词**筛节点文本。
+     *
+     * 为什么需要：契约 §6.4 的推进按钮判定是「前缀 + 装饰后缀白名单」（`下一题(1/10)` 要命中），
+     * 用 `words.contains(t)` 表达不了。文本同样取 `text`，为空时取 `contentDescription` ——
+     * 纯图标按钮只有后者。
+     */
+    fun findTextNodesBy(
+        roots: List<AccessibilityNodeInfo?>,
+        predicate: (String) -> Boolean,
+        maxDepth: Int = MAX_DEPTH,
+        limit: Int = 20
+    ): List<Pair<AccessibilityNodeInfo, Rect>> {
+        val out = ArrayList<Pair<AccessibilityNodeInfo, Rect>>()
+        for (r in roots) {
+            if (out.size >= limit) break
+            walkBy(r, predicate, maxDepth, limit, out, 0)
+        }
+        return out
+    }
+
+    private fun walkBy(
+        n: AccessibilityNodeInfo?,
+        predicate: (String) -> Boolean,
+        maxDepth: Int,
+        limit: Int,
+        out: MutableList<Pair<AccessibilityNodeInfo, Rect>>,
+        depth: Int
+    ) {
+        if (n == null || depth > maxDepth || out.size >= limit) return
+        // 契约 §6.4 v1.2.1：取 text；**空/全空白**才退回 contentDescription（纯图标按钮只有后者）
+        val t = (n.text?.toString()?.takeIf { it.isNotBlank() }
+            ?: n.contentDescription?.toString() ?: "").trim()
+        if (t.isNotEmpty() && predicate(t)) {
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            if (r.width() > 0 && r.height() > 0) out.add(n to r)
+        }
+        for (i in 0 until n.childCount) walkBy(n.getChild(i), predicate, maxDepth, limit, out, depth + 1)
+    }
+
+    /**
      * 按屏幕坐标找「能点的那个节点」：**可点击、且框覆盖该点**，多个命中时取**面积最小**的（最具体的那个）。
      *
      * 为什么需要它：`dispatchGesture` 的坐标手势在模拟器上会「返回成功却不生效」

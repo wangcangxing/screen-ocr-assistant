@@ -27,6 +27,11 @@ RULES = [
     (["等于多少", "1 + 1", "1+1"], "C"),
 ]
 
+# SoM 验收开关：默认 0 = 自动挑「答案字母对应的那个元素编号」（模拟真实模型看图指认框）；
+# 设 MOCK_SOM_ELEMENT=7 则强制回 E7，用来故意制造「编号与选项字母矛盾」以验证 App 的反矛盾保护。
+# 若 user 消息里没有【界面元素】段落（未开 SoM / 没发图），编号恒为 0，行为与 v1.3 的模拟服务一致。
+SOM_ELEMENT = int(os.environ.get("MOCK_SOM_ELEMENT", "0") or "0")
+
 
 def log_raw(user_content, answer):
     with open(LOG, "a", encoding="utf-8") as f:
@@ -56,6 +61,43 @@ def decide_label(user_content):
         if any(k in user_content for k in kws):
             return label
     return None
+
+
+def parse_som_elements(user_content):
+    """从 App 新加的【界面元素（对应图中编号的框）】段落里抽出 编号 -> 标签。
+
+    清单行格式（契约 2.2 / SomElement.describe()）：`E1 文本 关闭`、`E3 图标 magnifying glass`
+    —— 类别词（文本/图标）要剥掉，剩下的才是标签本身。
+    """
+    out = {}
+    m = re.search(r"【界面元素[^】]*】\s*\n(.*?)(\n\s*\n|\Z)", user_content, re.S)
+    if not m:
+        return out
+    for line in m.group(1).splitlines():
+        mm = re.match(r"^\s*E(\d+)\s+(?:(?:文本|图标)\s+)?(.+?)\s*$", line)
+        if mm:
+            out[mm.group(1)] = mm.group(2)
+    return out
+
+
+def pick_element_for_label(som, label):
+    """模拟真实多模态模型的行为：在编号清单里挑出「标签就是答案选项」的那个元素编号。
+
+    返回最小可用编号（int），挑不出返回 0。MOCK_SOM_ELEMENT 是强制覆盖，用于刻意测矛盾保护。
+    """
+    if not som or not label:
+        return 0
+    want = label.strip().upper()
+    hits = []
+    for k, v in som.items():
+        t = v.strip()
+        # 形如 "A. 对" / "A 对" / "A" / "(A) 对"
+        m = re.match(r"^\s*[（(]?\s*([A-Ha-h])\s*[).、．:：）]?\s*(.*)$", t)
+        if not m:
+            continue
+        if m.group(1).upper() == want and (m.group(2).strip() or len(t) <= 3):
+            hits.append(int(k))
+    return min(hits) if hits else 0
 
 
 def decide(user_content):
@@ -117,6 +159,30 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 ],
             })
+            return
+        if self.path.startswith("/quiz-near"):
+            # 近距滚动场景：第 2 题就在折叠线下方一点（比 /quiz-long 的 2200px 空白更接近真实）
+            html_path = os.path.join(HERE, "quiz-near.html")
+            with open(html_path, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if self.path.startswith("/quiz-long"):
+            # 长页面场景：第 2 题与「下一题」按钮初始都在屏幕外 —— 用来验证
+            # ① App 不会点屏幕外的按钮、② 会先向下滚动把下一题带进来
+            # 注意：必须排在 /quiz 之前，否则会被 "/quiz" 前缀先吃掉（踩过一次）
+            html_path = os.path.join(HERE, "quiz-long.html")
+            with open(html_path, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
         if self.path.startswith("/quiz"):
             html_path = os.path.join(HERE, "quiz-test.html")
@@ -196,24 +262,32 @@ class Handler(BaseHTTPRequestHandler):
         # 模拟真实模型：提示词要 JSON 就回 JSON，提示词要「只给选项」就回一个字母。
         # 设 MOCK_FORCE_JSON=1 可强制回 JSON，用来验证 App 的 JSON 兼容分支。
         wants_json = "JSON" in system_content.upper() or os.environ.get("MOCK_FORCE_JSON") == "1"
+        som = parse_som_elements(user_content)
+        # 默认按「答案字母对应的元素标签」自动挑编号（模拟真实模型看图后指认框）；
+        # MOCK_SOM_ELEMENT=N 则强制回 N，用于故意制造「编号与字母矛盾」验证反矛盾保护。
+        element_id = 0
+        if answer.get("is_question") and som:
+            element_id = SOM_ELEMENT or pick_element_for_label(som, answer.get("answer_label", ""))
         if wants_json:
+            if element_id:
+                answer["element_id"] = element_id
             content = json.dumps(answer, ensure_ascii=False)
             mode = "json"
         elif answer.get("is_question"):
-            content = answer["answer_label"]
+            content = answer["answer_label"] + ((" E%d" % element_id) if element_id else "")
             mode = "plain"
         else:
             content = "NONE"
             mode = "plain"
 
         log_raw(
-            "auth=%s mode=%s model=%s reasoning_effort=%s\nIMAGE: %s\nSYSTEM: %s\nUSER:\n%s"
+            "auth=%s mode=%s model=%s reasoning_effort=%s\nIMAGE: %s\nSOM: 收到 %d 个编号元素，回元素编号=%s\nSYSTEM: %s\nUSER:\n%s"
             % (auth, mode, req.get("model"), req.get("reasoning_effort"), image_info,
-               system_content[:200], user_content),
+               len(som), element_id or "-", system_content[:200], user_content),
             {"reply": content})
-        print("[mock] model=%s effort=%s mode=%s image=[%s] -> %s"
+        print("[mock] model=%s effort=%s mode=%s image=[%s] som=%d元素 回编号=%s -> %s"
               % (req.get("model"), req.get("reasoning_effort"), mode, image_info,
-                 content[:40].replace("\n", " ")),
+                 len(som), element_id or "-", content[:40].replace("\n", " ")),
               flush=True)
 
         self._send(200, {

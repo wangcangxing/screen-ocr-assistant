@@ -29,7 +29,12 @@ object LlmClient {
         val answerText: String,
         val confidence: Double,
         val explanation: String,
-        val rawContent: String
+        val rawContent: String,
+        /**
+         * 模型点名的界面元素编号（契约 2.3）：JSON 的 `element_id`，或文本里的 `E7` / `元素7` / `#7`。
+         * 解析不出来就是 null —— **绝不猜**。
+         */
+        val elementId: Int? = null
     )
 
     data class Result(
@@ -162,16 +167,22 @@ object LlmClient {
         }
     }
 
+    /**
+     * @param somElements 本次随消息一起发出去的 SoM 编号清单（**没有真的发标注图时必须是空列表**：
+     *                    编号是「图里的框」的编号，没图就没有依据）。
+     *                    清单为空时不仅不附清单，也不解析模型回的 `E<编号>`（见 [parseAnswer] 的 `allowElementId`）。
+     */
     fun ask(
         prefs: Prefs,
         question: Question,
         fullText: String,
         imageJpegBase64: String?,
+        somElements: List<SomElement> = emptyList(),
         onResult: (Result) -> Unit
     ) {
-        val content = buildUserContent(question, fullText)
+        val content = buildUserContent(question, fullText, somElements)
         io.execute {
-            val r = doAsk(prefs, content, imageJpegBase64)
+            val r = doAsk(prefs, content, imageJpegBase64, allowElementId = somElements.isNotEmpty())
             main.post { onResult(r) }
         }
     }
@@ -180,7 +191,8 @@ object LlmClient {
     fun ping(prefs: Prefs, onResult: (Result) -> Unit) {
         val content = "这是一次连通性测试，屏幕上没有题目。请按系统提示要求的格式回复。"
         io.execute {
-            val r = doAsk(prefs, content, null)
+            // 连通性测试不发编号清单，也就不解析元素编号（与 P2 同一条纪律）
+            val r = doAsk(prefs, content, null, allowElementId = false)
             main.post {
                 // 图片相关失败时给出可操作的提示，而不是让用户对着 400 发呆
                 if (!r.ok && r.httpCode == 400 && prefs.sendScreenshot) {
@@ -197,9 +209,19 @@ object LlmClient {
         }
     }
 
-    fun buildUserContent(q: Question, fullText: String): String {
+    fun buildUserContent(
+        q: Question,
+        fullText: String,
+        somElements: List<SomElement> = emptyList()
+    ): String {
         val sb = StringBuilder()
         sb.append("【屏幕文字】\n").append(fullText.take(4000)).append("\n\n")
+        // 契约 2.2：元素清单**紧跟屏幕文字之后**（编号与标注图上画的框一一对应）
+        if (somElements.isNotEmpty()) {
+            sb.append("【界面元素（对应图中编号的框）】\n")
+            for (e in somElements) sb.append(e.describe()).append('\n')
+            sb.append('\n')
+        }
         if (q.stem.isNotBlank()) {
             sb.append("【题干】\n").append(q.stem).append("\n\n")
         }
@@ -214,7 +236,12 @@ object LlmClient {
         return sb.toString()
     }
 
-    private fun doAsk(prefs: Prefs, userContent: String, imageJpegBase64: String?): Result {
+    private fun doAsk(
+        prefs: Prefs,
+        userContent: String,
+        imageJpegBase64: String?,
+        allowElementId: Boolean = true
+    ): Result {
         val started = System.currentTimeMillis()
         val url = endpointOf(prefs.baseUrl)
 
@@ -320,7 +347,7 @@ object LlmClient {
                 )
             }
 
-            val answer = parseAnswer(content)
+            val answer = parseAnswer(content, allowElementId)
                 ?: return Result(
                     false,
                     error = "无法从模型输出中解析出 JSON：${content.take(300)}",
@@ -345,10 +372,16 @@ object LlmClient {
     /**
      * 容忍两种协议：
      *  A) JSON —— 用户把预设提示词改成要求 JSON 时走这条；
-     *  B) 纯文本 —— 预设提示词是「只输出选项，不要输出其他内容」，回复可能就是 "B"。
+     *  B) 纯文本 —— 预设提示词是「只输出选项，不要输出其他内容」，回复可能就是 "B"，v3 起还可能是 "B E7"。
      * 两种都解析不出来时返回 null（调用方据此放弃，不会乱点）。
+     *
+     * v1.4 起额外解析**可选的元素编号**（契约 2.3）：JSON 读 `element_id`，纯文本读 `E7` / `元素7` / `#7`。
+     * 老格式（只有字母、只有 JSON 不含 element_id）的解析结果与 v1.3 完全一致，只是 `elementId` 为 null。
+     *
+     * @param allowElementId 只有本次**真的把标注图发给了模型**才为 true（P2 决策）：
+     *                       没有图时编号毫无依据，直接不解析，元素编号恒为 null —— 与 v1.3 行为一致。
      */
-    fun parseAnswer(content: String): Answer? {
+    fun parseAnswer(content: String, allowElementId: Boolean = true): Answer? {
         val cleaned = TextMatch.stripDecorations(content)
         if (cleaned.isEmpty()) return null
 
@@ -360,13 +393,21 @@ object LlmClient {
                 val o = JSONObject(cleaned.substring(start, end + 1))
                 if (o.has("is_question") || o.has("answer_label") || o.has("answer_text")) {
                     val conf = o.optDouble("confidence", 0.0).let { if (it.isNaN()) 0.0 else it }
+                    // 契约 1.2 说 element_id 是数字；这里也容忍 "E7" 这种字符串写法
+                    val rawEid = if (allowElementId && o.has("element_id") && !o.isNull("element_id")) {
+                        o.optString("element_id", "")
+                    } else ""
+                    val eid = if (!allowElementId) null else {
+                        o.optInt("element_id", 0).takeIf { it > 0 } ?: parseElementIdText(rawEid)
+                    }
                     return Answer(
                         isQuestion = o.optBoolean("is_question", true),
                         answerLabel = o.optString("answer_label", "").trim(),
                         answerText = o.optString("answer_text", "").trim(),
                         confidence = conf.coerceIn(0.0, 1.0),
                         explanation = o.optString("explanation", "").trim(),
-                        rawContent = content
+                        rawContent = content,
+                        elementId = eid
                     )
                 }
             }
@@ -380,12 +421,16 @@ object LlmClient {
                 answerText = "",
                 confidence = 0.0,
                 explanation = "模型回复「没有题目」",
-                rawContent = content
+                rawContent = content,
+                elementId = null
             )
         }
 
         val line = TextMatch.firstMeaningfulLine(cleaned)
         if (line.isEmpty()) return null
+
+        // 元素编号从**整段回复**里取第一个命中（`B E7` 这类编号常在字母后面）
+        val elementId = if (allowElementId) parseElementIdText(cleaned) else null
 
         if (line.length > 60) {
             // 太长的自由文本，无法安全映射到某个选项 —— 保留原文供人看，但标签留空
@@ -395,7 +440,8 @@ object LlmClient {
                 answerText = line.take(60),
                 confidence = 0.2,
                 explanation = "模型输出较长，未按「只给选项」的格式回复",
-                rawContent = content
+                rawContent = content,
+                elementId = elementId
             )
         }
 
@@ -406,9 +452,23 @@ object LlmClient {
             answerText = line,
             confidence = if (label.isNotEmpty()) 0.9 else 0.3,
             explanation = "",
-            rawContent = content
+            rawContent = content,
+            elementId = elementId
         )
     }
+
+    /**
+     * 纯文本协议里的元素编号（契约 2.3）：`E7` / `元素7` / `#7`，取**第一个**命中；没有返回 null。
+     *
+     * 前面要么是行首、要么是**非字母数字**（避免把 `2024E7` 这类当成编号）；
+     * 编号必须是 1 起（`E0` 不算）。解析不出来就返回 null —— **绝不猜**。
+     */
+    fun parseElementIdText(content: String): Int? {
+        val m = ELEMENT_ID_TEXT.find(content) ?: return null
+        return m.groupValues[1].toIntOrNull()
+    }
+
+    private val ELEMENT_ID_TEXT = Regex("(?:^|[^A-Za-z0-9_])(?:[Ee]|元素|#|＃)\\s*([1-9][0-9]*)")
 
     private fun readAll(ins: InputStream): String {
         val sb = StringBuilder()

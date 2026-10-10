@@ -84,6 +84,42 @@ object TextMatch {
         return t.uppercase()
     }
 
+    /**
+     * 从**元素标签**里抽出「归属标记」（契约 v1.1 §2.4 的反矛盾保护专用）。
+     *
+     * 与 [normalizeLabel] 的区别（这也是它必须单独存在的原因）：
+     *  - 只认**开头的显式选项标记**，不看标签有多长 —— `B. 水是由氢元素和氧元素组成的` 必须给出 `B`
+     *    （normalizeLabel 有 12 字截断，长标签会漏判）；
+     *  - 中文单字（对/错/是/否）与自由文本（图标描述）**不算归属**，返回 null
+     *    （normalizeLabel 会把「对」当字母处理，那是误判）。
+     *
+     * 认得的形态：`A`、`(A)`、`A. 对`、`(A) 对`、`A、对`、`A: 对`、`①对`、`1. 对`、`3`；
+     * 认不出返回 null：`对`、`magnifying glass`、`A simple marker or application.`（`A` 后面是空格+字母，不是分隔符）、`2024年`。
+     */
+    fun optionTokenOf(label: String): String? {
+        val t = label.trim()
+        if (t.isEmpty()) return null
+        // 圈号①…⑧本身就是标记，后面不要求分隔符（`①对` 是常见形态）
+        CIRCLED_TOKEN.find(t)?.let { c ->
+            return (CIRCLED.indexOf(c.groupValues[1][0]) + 1).toString()
+        }
+        // 字母 / 数字：后面要么是「分隔符 + 非空白」，要么整串到此结束
+        val m = OPTION_TOKEN.find(t) ?: return null
+        val ch = m.groupValues[1][0]
+        return if (ch.isDigit()) ch.toString() else ch.uppercase()
+    }
+
+    /** 圈号标记（①…⑧；⑨⑩ 不在选项族里，见 QuestionDetector 的 8 选项上限） */
+    private val CIRCLED_TOKEN = Regex("^[（(]?\\s*([①②③④⑤⑥⑦⑧])")
+
+    /**
+     * 字母/数字归属标记：`[（(]?` + `[A-Ha-h1-8]` + （分隔符 + 非空白 | 可选的收尾括号 + 整串结束）。
+     *
+     * 之所以要求「分隔符后必须跟非空白」，是为了避免把 `A simple marker or application.`
+     * 这类**以字母开头的英文描述**误判成选项 `A`。
+     */
+    private val OPTION_TOKEN = Regex("^[（(]?\\s*([A-Ha-h1-8])\\s*(?:[).、．:：）]\\s*\\S|[\\]）)]?$)")
+
     /** 最长公共子串长度 / 较短串长度，取值 0..1。适合作「子串包含」判断，不适合抗错别字。 */
     fun similarity(a: String, b: String): Double {
         if (a.isEmpty() || b.isEmpty()) return 0.0

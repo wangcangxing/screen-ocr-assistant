@@ -8,6 +8,9 @@
     <string name="sec_status">运行状态</string>
     <string name="sec_config">大模型配置（OpenAI 兼容接口）</string>
     <string name="sec_behavior">行为与触发</string>
+    <string name="sec_som">SoM 编号标注与解析服务</string>
+    <string name="sec_auto_advance">答完自动推进（v1.5）</string>
+    <string name="sec_finish">答题完毕收尾（v1.6）</string>
     <string name="sec_log">运行日志</string>
 
     <string name="hint_base_url">接口地址，例如 https://api.deepseek.com/v1</string>
@@ -15,6 +18,7 @@
     <string name="hint_model">模型名（可点下方按钮从接口拉取真实可用列表）</string>
     <string name="hint_reasoning_effort">推理强度，留空=不发送（如 low / high / max）</string>
     <string name="hint_system_prompt">系统提示词</string>
+    <string name="hint_omni_url">http://192.168.1.5:8010（或用 adb reverse 后的 http://127.0.0.1:8010）</string>
 
     <string name="btn_list_models">获取可用模型（GET /models）</string>
     <string name="btn_open_a11y">打开无障碍设置</string>
@@ -22,6 +26,7 @@
     <string name="btn_default_prompt">恢复默认提示词</string>
     <string name="btn_import_config">从文件导入配置</string>
     <string name="btn_test">测试接口连通性</string>
+    <string name="btn_test_omni">测试解析服务（GET /health）</string>
     <string name="btn_refresh_log">刷新日志</string>
     <string name="btn_clear_log">清空日志</string>
 
@@ -39,4 +44,26 @@
     <string name="sw_auto_click">自动点击答案选项</string>
     <string name="sw_dry_run">试运行（只显示答案，不点击）</string>
     <string name="sw_send_screenshot">发送屏幕截图给模型（视觉模式，需模型支持 image 模态）</string>
+
+    <string name="sw_som">SoM 编号标注（在截图上画编号框并附元素清单，模型回编号即可点准；关闭则回到 v1.3 行为）</string>
+    <string name="lbl_som_max_elements">编号元素上限（默认 40，1~200）</string>
+    <string name="sw_omni_parser">启用 OmniParser 解析服务（PC 侧，默认关；节点树/OCR 判不出题时用它兜底）</string>
+    <string name="lbl_omni_url">解析服务地址（HTTP，末尾不要带 /parse 或 /health）</string>
+    <string name="lbl_omni_timeout">解析服务超时（毫秒，默认 4000）</string>
+
+    <string name="sw_auto_advance">答完自动推进（点下一题/滚动）</string>
+    <string name="lbl_auto_advance_max_streak">连续推进上限（默认 3，1~10；连续这么多次仍没见到新题就暂停 60 秒）</string>
+
+    <string name="lbl_finish_mode">答题完毕后（整卷答完需经题卡校验；读不到按钮/弹窗一律不提交）</string>
+    <string name="rb_finish_off">什么都不做（默认，保持原有行为）</string>
+    <string name="rb_finish_submit">直接提交（自动点「提交作业」并在确认弹窗里点确认）</string>
+    <string name="rb_finish_idle">继续答题（停手，不再操作本应用 = 等同退出）</string>
+
+
+    <!-- v1.4：主页面 / 设置页 两页拆分 -->
+    <string name="btn_settings">高级设置（接口 / 识别参数 / 解析服务 / 日志）</string>
+    <string name="title_settings">高级设置</string>
+    <string name="sec_log_hint">运行日志在「高级设置」页底部（长按可复制全部）。</string>
+    <string name="sec_recognition">识别与触发参数</string>
+    <string name="sec_omni">解析服务（PC 侧 OmniParser）</string>
 </resources>

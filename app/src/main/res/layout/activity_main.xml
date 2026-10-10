@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  主页面（v1.4 起拆页）：只放**每天要动的东西** —— 运行状态、无障碍入口、以及
+  「行为与触发 / SoM 标注 / 答完自动下一题 / 答题自动提交」这几个开关。
+  接口地址、Key、识别参数、解析服务、日志等低频项全部移到 activity_settings.xml。
+-->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/rootScroll"
     android:layout_width="match_parent"
@@ -43,104 +48,6 @@
             android:layout_marginBottom="10dp"
             android:background="?android:attr/listDivider" />
 
-        <!-- ============ 大模型配置 ============ -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingBottom="6dp"
-            android:text="@string/sec_config"
-            android:textStyle="bold" />
-
-        <EditText
-            android:id="@+id/etBaseUrl"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_base_url"
-            android:importantForAutofill="no"
-            android:inputType="textUri"
-            android:maxLines="1" />
-
-        <EditText
-            android:id="@+id/etApiKey"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_api_key"
-            android:importantForAutofill="no"
-            android:inputType="textPassword"
-            android:maxLines="1" />
-
-        <EditText
-            android:id="@+id/etModel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_model"
-            android:importantForAutofill="no"
-            android:inputType="text"
-            android:maxLines="1" />
-
-        <Button
-            android:id="@+id/btnListModels"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/btn_list_models"
-            android:textAllCaps="false" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="8dp"
-            android:text="@string/lbl_reasoning_effort" />
-
-        <EditText
-            android:id="@+id/etReasoningEffort"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_reasoning_effort"
-            android:importantForAutofill="no"
-            android:inputType="text"
-            android:maxLines="1" />
-
-        <EditText
-            android:id="@+id/etSystemPrompt"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="top|start"
-            android:hint="@string/hint_system_prompt"
-            android:importantForAutofill="no"
-            android:inputType="textMultiLine"
-            android:minLines="4" />
-
-        <Button
-            android:id="@+id/btnSave"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/btn_save" />
-
-        <Button
-            android:id="@+id/btnDefaultPrompt"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/btn_default_prompt" />
-
-        <Button
-            android:id="@+id/btnImportConfig"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/btn_import_config" />
-
-        <Button
-            android:id="@+id/btnTest"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/btn_test" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="14dp"
-            android:layout_marginBottom="10dp"
-            android:background="?android:attr/listDivider" />
-
         <!-- ============ 行为与触发 ============ -->
         <TextView
             android:layout_width="match_parent"
@@ -167,111 +74,56 @@
             android:layout_height="wrap_content"
             android:text="@string/sw_dry_run" />
 
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="14dp"
+            android:layout_marginBottom="10dp"
+            android:background="?android:attr/listDivider" />
+
+        <!-- ============ SoM 编号标注 ============ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="6dp"
+            android:text="@string/sec_som"
+            android:textStyle="bold" />
+
         <Switch
-            android:id="@+id/swSendScreenshot"
+            android:id="@+id/swSom"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/sw_send_screenshot" />
+            android:text="@string/sw_som" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="14dp"
+            android:layout_marginBottom="10dp"
+            android:background="?android:attr/listDivider" />
+
+        <!-- ============ 答完自动下一题 ============ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="6dp"
+            android:text="@string/sec_auto_advance"
+            android:textStyle="bold" />
+
+        <Switch
+            android:id="@+id/swAutoAdvance"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/sw_auto_advance" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingTop="8dp"
-            android:text="@string/lbl_image_max_side" />
+            android:text="@string/lbl_auto_advance_max_streak" />
 
         <EditText
-            android:id="@+id/etImageMaxSide"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:importantForAutofill="no"
-            android:inputType="number" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="8dp"
-            android:text="@string/lbl_poll_interval" />
-
-        <EditText
-            android:id="@+id/etPollInterval"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:importantForAutofill="no"
-            android:inputType="number" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="8dp"
-            android:text="@string/lbl_ocr_scale" />
-
-        <EditText
-            android:id="@+id/etOcrScale"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:importantForAutofill="no"
-            android:inputType="number" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="8dp"
-            android:text="@string/lbl_min_score" />
-
-        <EditText
-            android:id="@+id/etMinScore"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:importantForAutofill="no"
-            android:inputType="number" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="8dp"
-            android:text="@string/lbl_debounce" />
-
-        <EditText
-            android:id="@+id/etDebounce"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:importantForAutofill="no"
-            android:inputType="number" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="8dp"
-            android:text="@string/lbl_min_conf" />
-
-        <EditText
-            android:id="@+id/etMinConf"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:importantForAutofill="no"
-            android:inputType="numberDecimal" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="8dp"
-            android:text="@string/lbl_dedup" />
-
-        <EditText
-            android:id="@+id/etDedup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:importantForAutofill="no"
-            android:inputType="number" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="8dp"
-            android:text="@string/lbl_timeout" />
-
-        <EditText
-            android:id="@+id/etTimeout"
+            android:id="@+id/etAutoAdvanceMaxStreak"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:importantForAutofill="no"
@@ -284,50 +136,63 @@
             android:layout_marginBottom="10dp"
             android:background="?android:attr/listDivider" />
 
-        <!-- ============ 日志 ============ -->
+        <!-- ============ 答题自动提交（整卷收尾） ============ -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingBottom="6dp"
-            android:text="@string/sec_log"
+            android:text="@string/sec_finish"
             android:textStyle="bold" />
 
-        <LinearLayout
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:paddingBottom="4dp"
+            android:text="@string/lbl_finish_mode" />
 
-            <Button
-                android:id="@+id/btnRefreshLog"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_refresh_log" />
-
-            <Button
-                android:id="@+id/btnClearLog"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_clear_log" />
-        </LinearLayout>
-
-        <ScrollView
-            android:id="@+id/logScroll"
+        <RadioGroup
+            android:id="@+id/rgFinishMode"
             android:layout_width="match_parent"
-            android:layout_height="320dp"
-            android:layout_marginTop="6dp"
-            android:background="?android:attr/colorBackground"
-            android:padding="6dp">
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/logText"
+            <RadioButton
+                android:id="@+id/rbFinishOff"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
-                android:text=""
-                android:textSize="11sp" />
-        </ScrollView>
+                android:text="@string/rb_finish_off" />
 
+            <RadioButton
+                android:id="@+id/rbFinishSubmit"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/rb_finish_submit" />
+
+            <RadioButton
+                android:id="@+id/rbFinishIdle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/rb_finish_idle" />
+        </RadioGroup>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="14dp"
+            android:layout_marginBottom="10dp"
+            android:background="?android:attr/listDivider" />
+
+        <!-- ============ 高级设置入口 ============ -->
+        <Button
+            android:id="@+id/btnOpenSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/btn_settings" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:text="@string/sec_log_hint" />
     </LinearLayout>
 </ScrollView>

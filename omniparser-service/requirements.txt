@@ -1,0 +1,44 @@
+# omniparser-service — lite backend dependencies
+#
+# Every version below is the version that was actually installed and used for
+# the verification runs on 2026-10-10 (Windows 10/11 x64, Python 3.12.7, CPU only,
+# torch 2.9.1+cpu from the pre-existing D:\Python312 environment).
+# Install into a venv (see README.md):
+#   D:\Python312\python.exe -m venv --system-site-packages .venv
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# --- icon detection (YOLOv9 TorchScript) --------------------------------
+torch==2.9.1
+torchvision==0.24.1
+
+# --- icon captioning (Florence-2), copied from util/utils.py ------------
+# PINNED ON PURPOSE: the OmniParser icon_caption checkpoint only loads through
+# the upstream remote code (auto_map -> microsoft/Florence-2-base-ft).
+# With this exact version it loads with 0 missing / 0 unexpected keys (measured).
+# transformers>=4.57 renames the Florence-2 parameters (measured: 668 missing /
+# 667 unexpected keys) and CANNOT load this checkpoint.  Do not upgrade blindly.
+transformers==4.46.1
+tokenizers==0.20.3
+huggingface-hub==0.36.2
+timm==1.0.30
+einops==0.8.2
+
+# --- text boxes (easyocr) ----------------------------------------------
+easyocr==1.7.2
+opencv-python-headless==5.0.0.93
+scikit-image==0.26.0
+python-bidi==0.6.11
+pyclipper==1.4.0
+Shapely==2.2.0
+ninja==1.13.2
+
+# --- already present in the base interpreter, pinned for reproducibility
+numpy==2.4.1
+Pillow==12.1.0
+scipy==1.17.0
+PyYAML==6.0.3
+
+# NOTE: --backend upstream is NOT covered here. It runs the untouched upstream
+# util/omniparser.py -> util/utils.py, which imports at module level and needs
+# the full upstream set (paddleocr, supervision, openai, matplotlib, opencv, ...)
+# see third_party/OmniParser-requirements.txt.  It is kept for comparison only.

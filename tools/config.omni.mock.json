@@ -1,0 +1,14 @@
+{
+  "base_url": "http://127.0.0.1:8080/v1",
+  "model": "mock-vision",
+  "api_key": "mock-key-for-local-verification",
+  "poll_interval_ms": 2000,
+  "ocr_scale_percent": 100,
+  "send_screenshot": true,
+  "reasoning_effort": "low",
+  "som_enabled": true,
+  "som_max_elements": 40,
+  "omni_parser_enabled": true,
+  "omni_parser_url": "http://127.0.0.1:8010",
+  "omni_parser_timeout_ms": 6000
+}

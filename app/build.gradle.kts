@@ -19,12 +19,15 @@ android {
     compileSdk = 35
 
     defaultConfig {
+        // v1.4 起 OmniParser 增强已合并回本工程主线：包名保持 origin 的 com.dsh.screenocr，
+        // 老用户沿用原签名密钥 `keystore/screenocr-release.jks`（指纹 8d09734c…6aa7）原地升级。
+        // 注意：曾单独装过 `com.dsh.screenocr.omni`（独立签名）的机器必须卸载重装，签名不同无法覆盖安装。
         applicationId = "com.dsh.screenocr"
         // takeScreenshot() 是 API 30 引入的，minSdk 必须 >= 30
         minSdk = 30
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 8
+        versionName = "1.4"
     }
 
     signingConfigs {

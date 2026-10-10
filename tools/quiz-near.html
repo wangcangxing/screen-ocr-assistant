@@ -1,0 +1,79 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>近距滚动 · 推进验证页</title>
+<style>
+  body { font-family: system-ui, "Noto Sans CJK SC", sans-serif; margin: 0; padding: 18px; background: #fff; color: #111; }
+  h1 { font-size: 17px; margin: 0 0 14px; color: #555; font-weight: 600; }
+  .q { font-size: 20px; line-height: 1.6; margin-bottom: 18px; }
+  .opt { display: block; width: 100%; text-align: left; font-size: 19px; line-height: 1.5;
+         padding: 16px 14px; margin: 12px 0; border: 2px solid #bbb; border-radius: 10px;
+         background: #fafafa; color: #111; }
+  .opt.picked { border-color: #e0218a; background: #ffe6f2; font-weight: 700; }
+  #log { margin-top: 22px; font-size: 15px; color: #c2185b; min-height: 24px; font-weight: 700; }
+  /* 折叠线以下的大段空白：让 Q2 与「下一题」按钮初始都在屏幕外 */
+  .spacer { height: 700px; background: repeating-linear-gradient(180deg,#f6f6f6 0 40px,#efefef 40px 80px);
+            display: flex; align-items: center; justify-content: center; color: #999; font-size: 15px;
+            border: 1px dashed #ddd; }
+  .far { margin-top: 26px; }
+  .mark { margin-top: 14px; font-size: 15px; color: #1565c0; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>近距滚动验证页 · 第 1 题在折叠线以上，第 2 题紧随其后（仍在折叠线下方一点）</h1>
+
+<div id="q1"></div>
+<div id="log1">尚未点击第 1 题</div>
+
+<div class="spacer">↓ 这里是 700px 空白（第 2 题就在折叠线下方一点）：第 2 题与「下一题」按钮初始都在屏幕外 ↓</div>
+
+<div id="q2" class="far"></div>
+<div id="log2">尚未点击第 2 题</div>
+
+<!-- 故意放在很下面：用来验证 App 不会去点屏幕外的按钮，而是先滚动 -->
+<button id="nextBtn" class="far" onclick="onNext()">下一题</button>
+<div id="mark" class="mark"></div>
+
+<script>
+const Q1 = {
+  stem: "下列关于水的说法中，正确的是（  ）",
+  opts: ["A. 水是由氢元素和氧元素组成的", "B. 水是由氢气和氧气组成的",
+         "C. 水是由两个氢原子和一个氧原子组成的", "D. 水分子中含有氢分子"],
+  answer: 0
+};
+const Q2 = {
+  stem: "下列哪个城市是中国的首都？（  ）",
+  opts: ["A. 上海", "B. 北京", "C. 广州", "D. 深圳"],
+  answer: 1
+};
+
+function render(q, hostId, logId, seq) {
+  const host = document.getElementById(hostId);
+  host.innerHTML = '<div class="q">' + q.stem + '</div>' +
+    q.opts.map((t, i) => '<button class="opt" data-i="' + i + '">' + t + '</button>').join('');
+  host.querySelectorAll('.opt').forEach(b => {
+    b.addEventListener('click', () => {
+      host.querySelectorAll('.opt').forEach(x => x.classList.remove('picked'));
+      b.classList.add('picked');
+      const i = Number(b.dataset.i);
+      const ok = i === q.answer ? "✅ 命中正确选项" : "❌ 点错了（正确是 " + "ABCD"[q.answer] + "）";
+      document.getElementById(logId).textContent = "第 " + seq + " 题被点击：" + "ABCD"[i] + " — " + ok;
+    });
+  });
+  document.getElementById(logId).textContent = "尚未点击第 " + seq + " 题";
+}
+
+function onNext() {
+  // 若 App 在滚动前就点了这个按钮（屏幕外），这里会留下痕迹，便于判定护栏失效
+  document.getElementById('mark').textContent =
+    "⚠️ 「下一题」被点击了（时间 " + new Date().toLocaleTimeString() + "）";
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+render(Q1, 'q1', 'log1', 1);
+render(Q2, 'q2', 'log2', 2);
+</script>
+</body>
+</html>
