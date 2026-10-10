@@ -367,8 +367,6 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
      */
     private val CARD_FAIL_BLOCK_MS = 15_000L
 
-    /** 题卡分段标题（用于判断面板是否还开着）：`第一部分`/`第二部分`… */
-    private val CARD_PART_TITLE = Regex("^第.{1,6}部分$")
 
     /**
      * 完成判定用的作答计数：**试运行也计数**（`dryRun` 跳过点击时按「本应作答」计）。
@@ -2064,37 +2062,10 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 再点一次题卡关闭面板（契约 §7.1 步骤 3），并**确认真的关掉了**；最多试 2 次。
-     *
-     * **必须重新找一次可见的「题卡」**：面板打开后「题卡」按钮跑到面板顶部（实测 y≈343），
-     * 而页面底部那个入口被面板盖住 —— 用页面坐标去点**关不掉**（真机踩到：面板一直开着，之后所有点击都落在面板上）。
-     */
-    private fun closeCardAndVerify(
-        screenW: Int,
-        screenH: Int,
-        attempt: Int = 1,
-        onDone: (Boolean) -> Unit
-    ) {
-        val card = findCardToggle(screenW, screenH)
-        val x = card?.second?.centerX() ?: cardTapX
-        val y = card?.second?.centerY() ?: cardTapY
-        AppLog.i("⑩ 收尾：关闭题卡点「${card?.first ?: "题卡"}」($x,$y)（第 $attempt 次）")
-        clickAtPoint(x, y, "题卡")
-        handler.postDelayed({
-            if (!isCardPanelOpen(screenW, screenH)) {
-                onDone(true)
-                return@postDelayed
-            }
-            if (attempt < 4) closeCardAndVerify(screenW, screenH, attempt + 1, onDone)
-            else onDone(false)
-        }, FINISH_WAIT_MS)
-    }
-
-    /**
      * 找「题卡」开关：**取最靠上的那个可见节点**。
      *
      * 为什么不能只取第一个命中的：面板打开后树里**同时有两个**「题卡」——
-     * 面板顶部那个（实测 `[432,267][648,420]`，能关面板）与页面底部那个（`[489,1824][588,1884]`，被面板盖住、
+     * 面板顶部那个（实测 `[432,267][648,420]`）与页面底部那个（`[489,1824][588,1884]`，被面板盖住、
      * 点它没有任何作用）。真机实测：用底部坐标去关，面板一直开着，随后所有点击都落在面板上（作答全丢）。
      */
     private fun findCardToggle(screenW: Int, screenH: Int): Pair<String, Rect>? =
@@ -2104,24 +2075,10 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
             .filter { it.first.isNotEmpty() }
             .minByOrNull { it.second.centerY() }
 
-    /**
-     * 面板是否还开着。
-     *
-     * v1.4 加固：原来只判"树里有没有『第X部分』" —— 而**树陈旧时那个节点会残留**（坑点 #19），
-     * 于是明明面板已关也被判"关不掉"，`closeCardAndVerify` 直接放弃 → 不判定、不提交
-     * （真机踩到：`题卡面板关不掉，暂停题卡校验 15s` 反复出现）。
-     *
-     * 现在要求**两个条件同时成立**才算开着：
-     *  ① 有「第X部分」分段标题；② 可见的「题卡」入口在**屏幕上半部**。
-     *  面板打开时「题卡」会跑到面板顶部（实测 y≈343），关闭后回到页面底部（y≈1824）——
-     *  用它当主判据，就能不受陈旧节点干扰。
-     */
-    private fun isCardPanelOpen(screenW: Int, screenH: Int): Boolean {
-        val hasPartTitle = visibleTexts(screenW, screenH).any { CARD_PART_TITLE.matches(it.first) }
-        if (!hasPartTitle) return false
-        val card = findCardToggle(screenW, screenH) ?: return false
-        return card.second.centerY() < screenH / 2
-    }
+    // v1.4 已删除 `closeCardAndVerify()` 与 `isCardPanelOpen()`（连 `CARD_PART_TITLE` 一起）：
+    // 收尾流程不再关闭题卡面板 —— 真机上那个面板用坐标点 4 次都关不掉，反而把整条收尾卡死
+    // （`题卡面板关不掉` → 校验提前 return → 永不提交）。现在读完题号直接进入判定/提交，
+    // 提交本身会让平台关闭面板（用户现场确认）。留着这两个函数只会误导后来人。
 
     /**
      * 找出当前屏幕上的**卷面标题**（v1.4 换卷检测用）。

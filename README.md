@@ -1,8 +1,15 @@
-# 屏幕答题助手（ScreenOcrAssistant）
+# 屏幕答题助手（ScreenOcrAssistant）· v1.4
 
 Android 无障碍辅助应用：**截屏 → 端侧 OCR 取字 → 本地启发式判断「像不像一道题」→ 调用 OpenAI 兼容大模型接口拿答案 → 用无障碍能力点中对应选项。**
 
 支持把**屏幕截图直接发给多模态模型**（视觉模式）。全部识别与决策都在本机发起；**只有识别出的文字、以及（开启视觉模式时）压缩后的截图会发送到你配置的接口**，不做任何其他上传。
+
+> **版本说明**：本仓库即主线工程（包名 `com.dsh.screenocr`，`versionCode 8` / `versionName 1.4`）。
+> v1.4 把原先独立的 `screen-ocr-assistant-omniparser`（`com.dsh.screenocr.omni`）的**全部能力合并回来**：
+> **SoM 编号标注**、**PC 侧 OmniParser 解析服务**、**答完自动下一题**、**答题完毕自动提交/停手**、**主页面与高级设置页拆页**、**长题页内滚动**。
+> 从 v1.3 升级：签名密钥不变（`keystore/screenocr-release.jks`），**可原地升级**；
+> 但装过 `com.dsh.screenocr.omni` 的机器要先卸载（签名不同）。
+> 面向使用者的分步说明见 [docs/使用说明.md](docs/使用说明.md)。
 
 ## 工作流程
 
@@ -108,13 +115,18 @@ release.keyPassword=…
 
 ## 使用步骤
 
-1. 打开应用 → 点「打开无障碍设置」→ 找到「屏幕答题助手」→ 打开开关 → 允许。
-2. 填「接口地址」（如 `https://api.deepseek.com/v1`）和「API Key」→ 点「保存配置」。
+> v1.4 起界面分成两页：**主页面**只放常用开关与状态，其余（接口、识别参数、解析服务、日志）在**高级设置**页。
+> 完整的分步说明与排错见 [docs/使用说明.md](docs/使用说明.md)。
+
+1. 打开应用 → 主页面点「打开无障碍设置」→ 找到「屏幕答题助手」→ 打开开关 → 允许。
+2. 主页面点「高级设置」→ 填「接口地址」（如 `https://api.deepseek.com/v1`）和「API Key」→ 点「保存配置」。
 3. 点「**获取可用模型**」→ 从接口真实返回的列表里选一个模型（会显示是否 `[可看图片]`、上下文长度、可用推理强度）。
    - 选到带 image 模态的模型 → **自动打开视觉模式**
    - 按该模型的 `effort.supported_levels` **自动把推理强度落到低档**（优选 `low`）
    - 也可用「测试接口连通性」先确认能通。
-4. 回到目标 App 正常答题，助手会自动识别并点击。
+4. 回主页面按需设置：**SoM 编号标注**、**答完自动下一题**、**答题完毕（自动提交 / 停手）**。
+5. 回到目标 App 正常答题，助手会自动识别并点击；整卷答完时按第 4 步的选择提交或停手。
+   - **开关是一拨即存的**（不需要另点保存）；文本框才需要「保存配置」。
 
 ### 参数
 
@@ -131,6 +143,12 @@ release.keyPassword=…
 | 点击所需最低置信度 | 0.5 | 纯文本协议下标签可识别时给 0.9 |
 | 同一屏去重时长 | 45 s | 同一道题在此时间内不重复作答；**需大于题目在画面里的停留时间** |
 | 接口超时 | 30000 ms | |
+| **SoM 编号标注** | **开** | 在截图上画编号框 + 附元素清单，模型可直接回编号（如 `B E7`）。**需视觉模式**（编号在图上） |
+| 编号元素上限 | 40 | 1~200；元素太多时编号会挤 |
+| **答完自动下一题** | **开** | 看不到需作答的题时点「下一题」类按钮，没有则向下滚动 |
+| 连续推进上限 | 3 | 1~10；连续这么多次仍没见到新题就暂停 60s |
+| **答题完毕收尾** | **什么都不做** | 三选一：什么都不做 / **直接提交**（点「提交作业」+ 确认）/ **继续答题（停手）** |
+| UI 缩放 / 视口 | — | 完整参数表见 [docs/使用说明.md](docs/使用说明.md) |
 
 ## 预设提示词
 
@@ -169,38 +187,60 @@ adb push my-config.json /sdcard/Android/data/com.dsh.screenocr/files/config.json
 ## 已知限制（如实说明）
 
 - **点不到就不点**：定位不到与答案匹配的选项时直接放弃，宁可不点也不点错。
-- **判断题**：**已支持**。节点树路径下 `A` 与 `对` 会合回 `A. 对`，因此能识别成组字母选项并点击（实测 MuMu 上答对；OCR 路径下仍依赖「A. / (A) / ① / 1.」这类标记，缺标记时只给答案不点击）。
-- **OCR 不是逐字确定的**：同一画面两次识别会出现「氢/氯」「关于/美于」这类抖动，行序也会变。去重因此用**编辑距离相似度**而非精确匹配，选项键按标签排序。选项正文换行的后半句可能不在选项里，匹配时靠子串包含兜底。
+- **判断题**：**已支持**。节点树路径下 `A` 与 `对` 会合回 `A. 对`，因此能识别成组字母选项并点击；OCR 路径下仍依赖「A. / (A) / ① / 1.」这类标记，缺标记时只给答案不点击。
+- **OCR 不是逐字确定的**：同一画面两次识别会出现「氢/氯」「关于/美于」这类抖动，行序也会变。去重因此用**编辑距离相似度**而非精确匹配，选项键按标签排序。
+  - v1.4 修了一个因此暴露的缺陷：判断题选项恒为「对/错」，去重键只有 7 个字符 → **同一套卷所有判断题共用一个键**，答过一题后其余全被判「已答」。现在选项正文过短时键会带上题干。
+- **整卷完成的判定靠题号**（v1.4）：识别卷面标题 → 点题卡取最大题号 N → 题号 < N 继续、题号 == N 收尾。
+  平台**读不到每题的作答标记**（智慧树题卡只有背景色），所以提交前会再确认「最后一题确实处理过」；
+  这带来一个已知边界：若最后一题处理完超过去重窗口（默认 45s）才回到卷尾，会多判一轮才提交。
+- **题卡面板会让 WebView 无障碍树变陈旧**（已知坑点 #19，**根因未查明**）：开/关题卡面板后，
+  题目与选项可能短时间从节点树里消失。v1.4 的做法是**收尾不再依赖关闭面板**（点「提交作业」平台自己会关），
+  并把"推不动"误判的惩罚锁从 5 分钟降到 15 秒 —— 但**没有根治**，极端情况下仍可能出现短暂停滞。
 - **视觉模式的流量**：每次提问会带一张约 100~140 KB 的 base64 图片；只在本地判定为「疑似题目」且未命中去重时才会发。
-- **答案只在日志里**：没有做悬浮窗/通知栏展示（避免再申请悬浮窗权限）。
+- **答案只在日志里**：没有做悬浮窗/通知栏展示（曾做过一版日志悬浮窗，因观感问题已移除）。
+- **长题页内滚动**（v1.4）：题干/选项超出屏幕时会先滚动把题面读全（每题最多 2 次）；
+  「滚到屏幕外选项后能否点中」**尚未真机验证**（触发与不误触发已验证）。
 - **无网络时**：调用失败写日志；失败后同一题 10 秒后允许重试。
 
 ## 目录结构
 
 ```
 app/src/main/java/com/dsh/screenocr/
-  MainActivity.kt                  配置界面（状态、参数、模型列表选择、日志）
-  ScreenOcrAccessibilityService.kt 主流程编排 + JPEG 编码 + 点击执行
+  MainActivity.kt                  主页面（状态 + 常用开关 + 高级设置入口）
+  SettingsActivity.kt              高级设置页（接口/识别参数/解析服务/日志）
+  PrefsUi.kt                       两页共享的「偏好 ↔ 控件」读写与状态文本（唯一口径）
+  ScreenOcrAccessibilityService.kt 主流程编排 + JPEG 编码 + 点击执行 + 收尾（题号判定/提交）
   OcrEngine.kt                     ML Kit 中文 OCR 封装
   QuestionDetector.kt              本地启发式：像不像一道题 + 抽选项
   LlmClient.kt                     /chat/completions + /models，双协议回复解析
   TextMatch.kt                     选项标签归一化、相似度（编辑距离/最长公共子串）
   ClickPlanner.kt                  答案 → 屏幕可点目标（节点点击 ↺ 坐标点击）
+  SomElement.kt                    SoM 元素结构 + 合并去重 + E1..EN 重编号
+  SomAnnotator.kt                  画编号标注图 + JPEG base64 编码
+  OmniParserClient.kt              解析服务客户端（GET /health、POST /parse）
+  OmniHealthStatus.kt              解析服务最近一次 /health 结果（两页共用显示）
   Prefs.kt                         全部可调参数 + 预设提示词与版本迁移
   ConfigFile.kt                    外部 config.json 导入
   AppLog.kt                        应用内日志环形缓冲 + logcat
 app/src/main/res/
   xml/accessibility_service_config.xml  无障碍能力声明（截图/手势/节点）
-  layout/activity_main.xml              配置界面布局
+  layout/activity_main.xml              主页面布局
+  layout/activity_settings.xml          高级设置页布局
+omniparser-service/                PC 侧解析服务（Python；权重与 venv 不入库）
+  server.py / verify_api.py / download_weights.ps1 / requirements.txt
+  util/                            上游 OmniParser 原样 vendored（只读）
+docs/
+  使用说明.md                       面向使用者的分步说明与排错
+  接口约定-SoM与解析服务.md          冻结契约（HTTP 契约 / SoM / 推进 / 收尾）
+  改造说明.md                       逐文件改动、证据索引与未验证项
+verify/                            独立验证脚本与验证报告（R0 ICU 检查等）
 tools/
-  mock_llm_server.py       本地模拟服务：/v1/chat/completions、/models、/quiz 测试页；
-                           会解码并保存收到的图片，便于核对视觉协议
-  quiz-test.html           真机验证用的中文选择题页
+  mock_llm_server.py       本地模拟服务：/v1/chat/completions、/models、/quiz、/quiz-near、/quiz-long、/canvas
+  quiz-test.html / quiz-near.html / quiz-long.html   真机验证用答题页（后两个用于长页面推进）
+  emulator-acceptance.ps1  模拟器端到端验收脚本
   install-sdk.ps1          下载安装 Android SDK 到 D:\Android\sdk
-  analyze_key.py           用真实请求重建去重键并比较相似度，用于定阈值
-  diff_requests.py         逐行 diff 相邻请求，定位 OCR 抖动
-  kill-app.sh              以应用 uid 结束进程的尝试（本机 SELinux 拒绝，未成功）
-  config.mock.json / prefs.default.xml / mock-received-image.jpg  测试用
+  analyze_key.py / diff_requests.py   去重键阈值分析、相邻请求 diff
+  config.mock.json / config.omni.mock.json / prefs.default.xml  测试用
 ```
 
 ---
