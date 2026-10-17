@@ -26,8 +26,8 @@ android {
         // takeScreenshot() 是 API 30 引入的，minSdk 必须 >= 30
         minSdk = 30
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.4"
+        versionCode = 9
+        versionName = "1.5"
     }
 
     signingConfigs {
