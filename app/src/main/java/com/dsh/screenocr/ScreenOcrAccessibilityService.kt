@@ -1705,8 +1705,11 @@ class ScreenOcrAccessibilityService : AccessibilityService() {
             ).mapNotNull { s.indexOf(it) }.minOrNull()
             if (cut == null || cut > 30) break
             // 把这一段（到下一个句号/换行）整体去掉
-            val end = listOf(s.indexOf('。', cut), s.indexOf('\n', cut)).filter { it > cut }.minOrNull() ?: s.length
-            s = s.removeRange(cut, end + 1)
+            // 注意：**不能**拿 `s.length` 再 +1 —— 那会越界。
+            // 实测就崩在这行：IndexOutOfBoundsException start 0, end -1, s.length() 166（答题成功后算去重键时）。
+            val end = listOf(s.indexOf('。', cut), s.indexOf('\n', cut)).filter { it > cut }.minOrNull()
+            val to = if (end == null) s.length else minOf(end + 1, s.length)
+            s = s.removeRange(cut, to)
         }
         // 页头重复：「提交作业」在一屏里会出现两次，属于按钮文本而非题干
         s = s.replace("提交作业", "")
